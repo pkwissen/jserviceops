@@ -5,7 +5,7 @@ hdbscan==0.8.40
 sentence-transformers==5.1.0
 transformers==4.54.1
 torch==2.8.0
-numpy==2.2.6
+numpy==2.3.2
 scikit-learn==1.7.1
 pandas==2.3.1
 plotly==6.3.0
@@ -19,7 +19,6 @@ rich==14.1.0
 markdown-it-py==4.0.0
 mdurl==0.1.2
 pygments==2.19.2
-
 
 altair==5.5.0
 altgraph==0.17.4
@@ -53,12 +52,8 @@ jsonschema==4.25.0
 jsonschema-specifications==2025.4.1
 kiwisolver==1.4.8
 MarkupSafe==3.0.2
-matplotlib==3.10.3
 narwhals==2.0.1
-numpy==2.3.2
-openpyxl==3.1.5
 packaging==25.0
-pandas==2.3.1
 pefile==2023.2.7
 pillow==11.3.0
 prophet==1.1.7
@@ -71,12 +66,10 @@ python-dateutil==2.9.0.post0
 pytz==2025.2
 pywin32-ctypes==0.2.3
 referencing==0.36.2
-requests==2.32.4
 rpds-py==0.26.0
 six==1.17.0
 smmap==5.0.2
 stanio==0.5.1
-streamlit==1.47.1
 tenacity==9.1.2
 toml==0.10.2
 tornado==6.5.1
@@ -85,6 +78,5 @@ typing_extensions==4.14.1
 tzdata==2025.2
 urllib3==2.5.0
 watchdog==6.0.0
-xlsxwriter==3.2.5
 zope.event==5.1.1
 zope.interface==7.2
