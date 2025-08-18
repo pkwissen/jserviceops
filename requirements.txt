@@ -1,3 +1,4 @@
+python==3.12.3
 # Core App
 streamlit==1.47.1
 pandas==2.3.1
