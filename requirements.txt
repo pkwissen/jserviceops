@@ -1,28 +1,25 @@
-python==3.12.3
 # Core App
-streamlit==1.47.1
-pandas==2.3.1
-numpy==2.3.2
+streamlit
+pandas
+numpy
 
 # Excel Support
-openpyxl==3.1.5
-xlsxwriter==3.2.5
+openpyxl
+xlsxwriter
 
 # Text Processing & ML
 scikit-learn
 transformers==4.54.1
 torch
 langchain-community==0.3.21
-
 # Topic Modeling
 bertopic==0.17.3
 langchain-groq
 
 # Optional: Visualization
-matplotlib==3.10.3
-altair==5.5.0
+matplotlib
 
-# Other Dependencies
+altair==5.5.0
 altgraph==0.17.4
 attrs==25.3.0
 blinker==1.9.0
@@ -54,8 +51,12 @@ jsonschema==4.25.0
 jsonschema-specifications==2025.4.1
 kiwisolver==1.4.8
 MarkupSafe==3.0.2
+matplotlib==3.10.3
 narwhals==2.0.1
+numpy==2.3.2
+openpyxl==3.1.5
 packaging==25.0
+pandas==2.3.1
 pefile==2023.2.7
 pillow==11.3.0
 prophet==1.1.7
@@ -73,6 +74,7 @@ rpds-py==0.26.0
 six==1.17.0
 smmap==5.0.2
 stanio==0.5.1
+streamlit==1.47.1
 tenacity==9.1.2
 toml==0.10.2
 tornado==6.5.1
@@ -81,5 +83,6 @@ typing_extensions==4.14.1
 tzdata==2025.2
 urllib3==2.5.0
 watchdog==6.0.0
+xlsxwriter==3.2.5
 zope.event==5.1.1
 zope.interface==7.2
