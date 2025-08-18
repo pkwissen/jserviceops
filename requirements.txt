@@ -1,23 +1,25 @@
-# Core App
-streamlit
-pandas
-numpy
-
-# Excel Support
-openpyxl
-xlsxwriter
-
-# Text Processing & ML
-scikit-learn
-transformers==4.54.1
-torch
-langchain-community==0.3.21
-# Topic Modeling
+streamlit==1.48.1
 bertopic==0.17.3
-langchain-groq
+umap-learn==0.5.9.post2
+hdbscan==0.8.40
+sentence-transformers==5.1.0
+transformers==4.54.1
+torch==2.8.0
+numpy==2.2.6
+scikit-learn==1.7.1
+pandas==2.3.1
+plotly==6.3.0
+matplotlib==3.10.5
+pyyaml==6.0.2
+openpyxl==3.1.5
+xlsxwriter==3.2.5
+requests==2.32.4
+python-dotenv==1.1.1
+rich==14.1.0
+markdown-it-py==4.0.0
+mdurl==0.1.2
+pygments==2.19.2
 
-# Optional: Visualization
-matplotlib
 
 altair==5.5.0
 altgraph==0.17.4
