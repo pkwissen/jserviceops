@@ -233,6 +233,51 @@ def main():
 
         except Exception as e:
             st.error(f"❌ Failed to generate shift plan from file: {e}")
+    
+        # --- NEW: Daily analyst requirement (reactive with channel selector) ---
+    st.markdown("## Daily Analyst Requirement")
+
+    # User input for analyst capacity (default 14)
+    analyst_capacity = st.number_input(
+        "Tickets handled per analyst per day",
+        min_value=1,
+        max_value=100,
+        value=14,
+        step=1
+    )
+
+    if st.session_state.get('forecast') is None:
+        st.warning("⚠️ Please run the forecast first.")
+    else:
+        # Compute daily requirement
+        daily_df = planner.daily_analyst_requirements(
+            st.session_state['forecast'],
+            analysts_capacity_per_day=analyst_capacity,
+            include_total=True
+        )
+
+        # Channel selection (radio buttons instead of dropdown)
+        channels = daily_df["Channel"].unique().tolist()
+        selected_channel = st.radio("Select Channel", options=channels, horizontal=True)
+
+        # Filter dataframe
+        filtered_df = daily_df[daily_df["Channel"] == selected_channel]
+
+        st.dataframe(filtered_df, hide_index=True, use_container_width=True)
+
+        # Save & download full table (not just filtered one)
+        out_dir = Path("forecast_app/output")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"Daily_Analyst_Requirement_{start_date.strftime('%b%d')}_{end_date.strftime('%b%d')}.xlsx"
+        daily_df.to_excel(out_path, index=False)
+
+        with open(out_path, "rb") as f:
+            st.download_button(
+                label="📥 Download Full Daily Analyst Requirement",
+                data=f,
+                file_name=out_path.name
+            )
+
 
 # ✅ Only run when executed directly
 if __name__ == "__main__":

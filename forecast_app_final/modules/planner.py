@@ -137,3 +137,52 @@ def apply_coloring_and_download(all_plans, start_date, end_date, backup_path=Non
             file_name=f"Final_Heat_Map_{start_date.strftime('%b%d')}_{end_date.strftime('%b%d')}.xlsx"
         )
 
+# -----------------------------
+# NEW: Daily analyst requirement
+# -----------------------------
+import numpy as np
+import pandas as pd
+
+def daily_analyst_requirements(full_forecast: pd.DataFrame, analysts_capacity_per_day: int = 14, include_total: bool = True) -> pd.DataFrame:
+    """
+    Compute daily analyst requirements using 14 tickets/analyst/day (default).
+    Works for whichever channels are present (Chat, Phone, Phone59, Self-service).
+    Expects `full_forecast` with columns: Date, Channel, '1'..'24'.
+    """
+    if full_forecast is None or full_forecast.empty:
+        return pd.DataFrame(columns=["Date", "Channel", "Forecasted_Volume", "Analysts_Required", "Capacity_per_Analyst_per_Day"])
+
+    df = full_forecast.copy()
+    # Identify hour columns that are numeric strings: '1'..'24'
+    hour_cols = [c for c in df.columns if isinstance(c, str) and c.isdigit()]
+    if not hour_cols:
+        return pd.DataFrame(columns=["Date", "Channel", "Forecasted_Volume", "Analysts_Required", "Capacity_per_Analyst_per_Day"])
+
+    # Daily totals per channel
+    df["Date"] = pd.to_datetime(df["Date"]).dt.date
+    daily = (
+        df.groupby(["Date", "Channel"], as_index=False)[hour_cols]
+          .sum()
+    )
+    daily["Forecasted_Volume"] = daily[hour_cols].sum(axis=1).astype(int)
+    daily = daily[["Date", "Channel", "Forecasted_Volume"]]
+
+    # Analysts required at 14 tickets/analyst/day
+    daily["Analysts_Required"] = np.ceil(daily["Forecasted_Volume"] / float(analysts_capacity_per_day)).astype(int)
+    daily["Capacity_per_Analyst_per_Day"] = int(analysts_capacity_per_day)
+
+    # Optional: an 'All' row per date (sum across channels)
+    if include_total:
+        total = (
+            daily.groupby("Date", as_index=False)["Forecasted_Volume"]
+                 .sum()
+                 .rename(columns={"Forecasted_Volume": "Forecasted_Volume"})
+        )
+        total["Channel"] = "All"
+        total["Analysts_Required"] = np.ceil(total["Forecasted_Volume"] / float(analysts_capacity_per_day)).astype(int)
+        total["Capacity_per_Analyst_per_Day"] = int(analysts_capacity_per_day)
+        # Align columns and append
+        total = total[["Date", "Channel", "Forecasted_Volume", "Analysts_Required", "Capacity_per_Analyst_per_Day"]]
+        daily = pd.concat([daily, total], ignore_index=True)
+
+    return daily.sort_values(["Date", "Channel"]).reset_index(drop=True)
