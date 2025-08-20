@@ -58,6 +58,6 @@ def generate_analyst_summary(df):
             display[col] = display[col].replace(0, "")
 
     # Reset index and unify analyst column name
-    display = display.reset_index().rename(columns={analyst_col: "Analyst who closed the ticket"})
+    display = display.reset_index().rename(columns={analyst_col: "Analyst Who Closed The Ticket"})
 
     return display

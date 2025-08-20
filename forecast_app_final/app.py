@@ -36,11 +36,11 @@ if getattr(sys, 'frozen', False):
     subprocess.Popen(["streamlit", "run", script_path])
     sys.exit()
 
-def main():
-    # -----------------------------
-    # Streamlit UI starts here
-    # -----------------------------
+# -----------------------------
+# Streamlit UI starts here
+# -----------------------------
 
+def main():
     if st.button("Back to Homepage", key="heat_back_homepage"):
         st.session_state["current_app"] = "Homepage"
         st.rerun()  # Navigate back to the homepage
@@ -87,12 +87,14 @@ def main():
     if "show_hourly_distribution" not in st.session_state:
         st.session_state.show_hourly_distribution = False
 
-    # File paths
+    # File paths (use Path objects everywhere)
     processed_path = PROCESSED_PATH
     transformed_path = TRANSFORMED_PATH
 
-    # ------------- Handle Uploads ---------------
+    # ------------- Handle Uploads Based on Option Selected ---------------
+
     if use_new_data == "Yes":
+        # Always ask for Service Now data
         uploaded_file1 = st.file_uploader("Upload new raw data from Service Now (.xlsx)", type=["xlsx"])
         if uploaded_file1:
             try:
@@ -107,6 +109,7 @@ def main():
             st.warning("⚠️ Please upload Service Now file to continue.")
             st.stop()
 
+        # Only if both are selected, ask for Five9 file
         if heatmap_option == "Service Now - Five9 together":
             uploaded_file2 = st.file_uploader("Upload new raw data from Five9 (.csv)", type=["csv"])
             if uploaded_file2:
@@ -161,6 +164,7 @@ def main():
 
     tasks_per_resource = {"Chat": 13, "Phone": 13, "Phone59": 13, "Self-service": 15}
 
+    # Run Forecast Button
     run_forecast = st.button("🚀 Run Forecast & Generate Heat Map", use_container_width=True)
 
     if run_forecast:
@@ -171,10 +175,12 @@ def main():
 
         forecast_dfs = []
 
+        # Set channels dynamically based on selected heatmap option
         if heatmap_option == "Service Now":
             channels = ["Chat", "Phone", "Self-service"]
         elif heatmap_option == "Service Now - Five9 together":
             channels = ["Chat", "Phone59", "Self-service"]
+
 
         for i, channel in enumerate(channels):
             progress.progress(int((i + 1) / len(channels) * 80), text=f"⏳ Forecasting {channel}...")
@@ -191,10 +197,13 @@ def main():
         progress.progress(100, text="✅ All done!")
         planner.apply_coloring_and_download(shift_plans, start_date, end_date, backup_path=FORECAST_DATA_PATH, heatmap_option=heatmap_option)
 
+
+    # Show saved heatmap if available
     if st.session_state['plans'] is not None and not run_forecast:
         st.markdown("### Showing Heat Map")
         planner.apply_coloring_and_download(st.session_state['plans'], start_date, end_date, heatmap_option=heatmap_option)
 
+    # Shift Planning Views
     st.markdown("---")
     st.markdown("## 📋 View Shift Planning Details")
 
@@ -208,33 +217,39 @@ def main():
         try:
             summary_df, hourly_df = shift_plan.main_pipeline(shift_file_path)
 
+            # Determine which channels to show based on heatmap_option
             if heatmap_option == "Service Now":
                 channels = ["Chat", "Phone", "Self-service"]
             elif heatmap_option == "Service Now - Five9 together":
                 channels = ["Chat", "Phone59", "Self-service"]
             else:
-                channels = []
+                channels = []  # default to empty if no match
 
             if st.session_state.show_shift_summary:
                 st.subheader("🔹 Shift Level Summary")
+                # ❌ Drop Shift, Start, End columns before showing
                 filtered_summary_df = summary_df.drop(columns=["shift", "start", "end"], errors='ignore')
 
                 if heatmap_option == "Service Now":
                     filtered_summary_df = filtered_summary_df.drop(columns=["shift", "start", "end", "Phone59"], errors='ignore')
                 elif heatmap_option == "Service Now - Five9 together":
                     filtered_summary_df = filtered_summary_df.drop(columns=["shift", "start", "end", "Phone"], errors='ignore')
+                else:
+                    channels = []  # default to empty if no match
+
 
                 st.dataframe(filtered_summary_df.reset_index(drop=True), hide_index=True)
 
             if st.session_state.show_hourly_distribution:
                 st.subheader("🔸 Final Hourly Distribution")
+                # ✅ Filter hourly_df as well to show relevant channels
                 filtered_hourly_df = hourly_df[[col for col in channels if col in hourly_df.columns]]
                 st.dataframe(hourly_df.reset_index(drop=True), hide_index=True)
 
         except Exception as e:
             st.error(f"❌ Failed to generate shift plan from file: {e}")
-    
-        # --- NEW: Daily analyst requirement (reactive with channel selector) ---
+
+    # --- NEW: Daily analyst requirement (reactive with channel selector) ---
     st.markdown("## Daily Analyst Requirement")
 
     # User input for analyst capacity (default 14)
@@ -277,8 +292,5 @@ def main():
                 data=f,
                 file_name=out_path.name
             )
-
-
-# ✅ Only run when executed directly
 if __name__ == "__main__":
     main()

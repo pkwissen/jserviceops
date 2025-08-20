@@ -136,7 +136,6 @@ def apply_coloring_and_download(all_plans, start_date, end_date, backup_path=Non
             data=f,
             file_name=f"Final_Heat_Map_{start_date.strftime('%b%d')}_{end_date.strftime('%b%d')}.xlsx"
         )
-
 # -----------------------------
 # NEW: Daily analyst requirement
 # -----------------------------
@@ -186,3 +185,4 @@ def daily_analyst_requirements(full_forecast: pd.DataFrame, analysts_capacity_pe
         daily = pd.concat([daily, total], ignore_index=True)
 
     return daily.sort_values(["Date", "Channel"]).reset_index(drop=True)
+
