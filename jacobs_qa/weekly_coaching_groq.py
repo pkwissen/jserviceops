@@ -213,6 +213,7 @@ except Exception:
     Groq = None
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+
 _groq_client = Groq(api_key=GROQ_API_KEY) if Groq and GROQ_API_KEY else None
 
 def _groq_complete(messages: List[Dict[str, str]], max_tokens: int = 220) -> str:
