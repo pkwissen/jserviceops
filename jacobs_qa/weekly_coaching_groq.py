@@ -212,6 +212,7 @@ try:
 except Exception:
     Groq = None
 
+#Updated upstream
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 _groq_client = Groq(api_key=GROQ_API_KEY) if Groq and GROQ_API_KEY else None
@@ -644,13 +645,13 @@ def main():
     # --- CASE 1: Load from already saved tracker ---
     if saved_tracker_file:
         try:
-            tracker = pd.read_excel(saved_tracker_file, sheet_name="Coaching Tracker")
+            tracker = pd.read_excel(saved_tracker_file, sheet_name="Coaching Tracker").drop(columns=["Unnamed: 0"],errors="ignore")
             # Ensure category column exists on load
             if "Quality Parameter Category" not in tracker.columns:
                 tracker["Quality Parameter Category"] = tracker["Areas to Improve"].apply(categorize_quality_parameter).astype(str).str.strip()
             st.session_state["tracker"] = tracker
             st.success(f"✅ Loaded saved tracker. Rows: {len(tracker)}")
-            st.dataframe(tracker, use_container_width=True)
+            st.dataframe(tracker.drop(columns=["Unnamed: 0"], errors="ignore"), use_container_width=True, hide_index=True)
 
             # Treemap (exclude blanks; label "Category, Count")
             _tmp = tracker.copy()
@@ -696,7 +697,7 @@ def main():
                     if sel_cat:
                         cat_df = tracker[tracker["Quality Parameter Category"] == sel_cat].copy()
                         st.subheader(f"🔎 Records for category: {sel_cat}")
-                        st.dataframe(cat_df, use_container_width=True)
+                        st.dataframe(cat_df, use_container_width=True, hide_index=True)
 
                         # Highlight analysts missing criteria (those present in this category)
                         st.subheader(f"⚠️ Analysts with Missing Criteria in {sel_cat}")
@@ -726,10 +727,14 @@ def main():
                 top_score = wk_df["__score__"].max()
                 top_week = wk_df[wk_df["__score__"] == top_score].sort_values(["__score__", "Employee Name"], ascending=[False, True])
                 st.subheader("Top Performer — Selected Week")
-                st.dataframe(top_week.drop(columns=["_rank"]), use_container_width=True)
+                st.dataframe(top_week.drop(columns=["_rank"]), use_container_width=True, hide_index=True)
 
             if btn_top_month:
-                st.warning("Month-wide view requires generating from weekly report in this session.")
+                top_score=tracker["__score__"].max()
+                top_month = tracker[tracker["__score__"] == top_score].sort_values(["__score__","Employee Name"], ascending=[False, True])
+                st.subheader("Top Performer — Selected Month")
+                st.dataframe(top_month, use_container_width=True, hide_index=True)
+
             if btn_improve:
                 need_improve = tracker[
                     tracker["Quality Parameter Category"].notna() &
@@ -737,7 +742,7 @@ def main():
                     tracker["Quality Parameter Category"].str.lower().ne("nan")
                 ].copy()
                 st.subheader("Agents with Improvement Criteria Identified")
-                st.dataframe(need_improve, use_container_width=True)
+                st.dataframe(need_improve, use_container_width=True, hide_index=True)
 
         except Exception as e:
             st.error("Could not read uploaded tracker.")
@@ -761,8 +766,8 @@ def main():
                 st.error("Could not find required sheets. Ensure workbook has 'Manual Assessments Data' and 'ServiceNow Coaching Assessment'.")
                 st.stop()
 
-            manual_df = pd.read_excel(xls, manual_sheet)
-            sn_df = pd.read_excel(xls, sn_sheet)
+            manual_df = pd.read_excel(xls, manual_sheet).drop(columns=["Unnamed: 0"],errors="ignore")
+            sn_df = pd.read_excel(xls, sn_sheet).drop(columns=["Unnamed: 0"],errors="ignore")
         except Exception as e:
             st.exception(e)
             st.stop()
@@ -867,7 +872,7 @@ def main():
                 top_score = wk_df["__score__"].max()
                 top_week = wk_df[wk_df["__score__"] == top_score].sort_values(["__score__", "Employee Name"], ascending=[False, True])
                 st.subheader("Top Performer — Selected Week")
-                st.dataframe(top_week.drop(columns=["_rank"]), use_container_width=True)
+                st.dataframe(top_week.drop(columns=["_rank"]), use_container_width=True, hide_index=True)
 
             if btn_top_month:
                 manual_df_raw = st.session_state.get("manual_df_raw")
@@ -893,7 +898,7 @@ def main():
                             how="left"
                         )
                         st.subheader("Top Performer — Selected Month")
-                        st.dataframe(best_full.sort_values("score", ascending=False), use_container_width=True)
+                        st.dataframe(best_full.sort_values("score", ascending=False), use_container_width=True, hide_index=True)
                 else:
                     st.warning("Please generate a tracker first to compute month-wide top performer.")
 
