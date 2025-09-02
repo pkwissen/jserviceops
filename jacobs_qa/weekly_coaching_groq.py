@@ -14,7 +14,7 @@ import streamlit as st
 
 # ========================= UI CONSTANTS ========================= #
 APP_TITLE = "Weekly Coaching Assessment Tracker"
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"  # change if you prefer a different Groq model
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 AREAS_TO_IMPROVE_EXAMPLES = [
     "Probe for full issue context before troubleshooting.",
     "Summarize resolution and confirm next steps with the customer.",
@@ -25,7 +25,6 @@ AREAS_TO_IMPROVE_EXAMPLES = [
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 # ========================= UTILS ========================= #
-
 def _norm(s: Optional[str]) -> Optional[str]:
     if s is None:
         return None
@@ -36,41 +35,32 @@ def _norm(s: Optional[str]) -> Optional[str]:
     return None
 
 def pick_first_available_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    """Find first matching column (case-insensitive, robust to non-string/MultiIndex)."""
     if df is None or df.empty:
         return None
-
     def col_to_text(col) -> str:
         if isinstance(col, (list, tuple)):
             col = " ".join(str(x) for x in col)
         return str(col)
-
     def norm(s: str) -> str:
         return s.lower().strip()
-
     def norm_simple(s: str) -> str:
         return re.sub(r"[^a-z]", "", norm(s))
-
     lower_map, simple_map = {}, {}
     for original in df.columns:
         t = col_to_text(original)
         lower_map.setdefault(norm(t), original)
         simple_map.setdefault(norm_simple(t), original)
-
     for cand in candidates:
         key = norm(str(cand))
         if key in lower_map:
             return lower_map[key]
-
     for cand in candidates:
         key = norm_simple(str(cand))
         if key in simple_map:
             return simple_map[key]
-
     return None
 
 def week_of_month(date: dt.date) -> int:
-    """Return 1..5 week-of-month for a date (Mon-Sun weeks)."""
     first_day = date.replace(day=1)
     adjusted_dom = date.day + (first_day.weekday())
     return int(math.ceil(adjusted_dom / 7.0))
@@ -113,43 +103,20 @@ def average_of_grades(series: pd.Series) -> Optional[float]:
     return round(float(np.mean(mapped)), 2) if mapped else None
 
 # ========================= TEXT CLEANING ========================= #
-
 YESNO_PATTERNS = [
-    r":\s*-?\s*Yes\b",
-    r":\s*-?\s*No\b",
-    r":\s*-?\s*Yes/No\b",
-    r":\s*-?\s*Resolved\b",
-    r":\s*-?\s*Escalated\b",
-    r":\s*-?\s*Closed\b",
+    r":\s*-?\s*Yes\b", r":\s*-?\s*No\b", r":\s*-?\s*Yes/No\b",
+    r":\s*-?\s*Resolved\b", r":\s*-?\s*Escalated\b", r":\s*-?\s*Closed\b",
     r":\s*Accurate\b",
 ]
 YESNO_SUFFIX = re.compile("|".join(YESNO_PATTERNS), re.IGNORECASE)
 BULLET_LINE = re.compile(r"^\s*(?:\d+[\.\)]|[-*•·])\s+")
-
 CHECKLIST_KEYS = [
-    "checked for previous tickets",
-    "preference contact method",
-    "preferred contact method",
-    "contact type",
-    "ms teams chat integration",
-    "ms teams integration",
-    "short description",
-    "configuration item",
-    "category",
-    "computer name documented",
-    "error screenshot attached",
-    "ticket state",
-    "work note documentation",
-    "additional assistance",
-    "call opening followed",
-    "user validation procedure",
-    "display empathy & assurance",
-    "call holding procedure",
-    "professional and positive tone",
-    "sufficient probing",
-    "proper 3 reminder process",
-    "bomgar chat messages attached",
-    "computer name documented/ bomgar chat messages attached",
+    "checked for previous tickets","preference contact method","preferred contact method","contact type",
+    "ms teams chat integration","ms teams integration","short description","configuration item","category",
+    "computer name documented","error screenshot attached","ticket state","work note documentation",
+    "additional assistance","call opening followed","user validation procedure","display empathy & assurance",
+    "call holding procedure","professional and positive tone","sufficient probing","proper 3 reminder process",
+    "bomgar chat messages attached","computer name documented/ bomgar chat messages attached",
 ]
 
 def _is_checklist_line(line: str) -> bool:
@@ -167,7 +134,6 @@ def _is_checklist_line(line: str) -> bool:
     return False
 
 def clean_comment(raw: str) -> str:
-    """Keep only free-text sentences; remove yes/no checklists & bullets."""
     if not isinstance(raw, str):
         return ""
     raw = raw.replace("\r", "\n")
@@ -199,26 +165,22 @@ def clean_output(text: str) -> str:
     return text.strip()
 
 # ========================= GROQ LLM (NO BATCH) ========================= #
-
 SYSTEM_SUMMARY = (
     "You are a QA coaching assistant. Summarize ONLY improvement-relevant text "
     "in 2–3 concise sentences (no bullets). Do not mention strengths, generic advice, "
     "or checklists. Be direct and specific."
 )
 
-# Optional Groq client
 try:
-    from groq import Groq  # pip install groq
+    from groq import Groq
 except Exception:
     Groq = None
 
-#Updated upstream
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-
+# Put your valid key here / or set via env variable
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 _groq_client = Groq(api_key=GROQ_API_KEY) if Groq and GROQ_API_KEY else None
 
 def _groq_complete(messages: List[Dict[str, str]], max_tokens: int = 220) -> str:
-    """Single Groq chat completion. Returns empty string on failure or if no key."""
     if not _groq_client:
         return ""
     try:
@@ -231,61 +193,34 @@ def _groq_complete(messages: List[Dict[str, str]], max_tokens: int = 220) -> str
         out = (resp.choices[0].message.content or "").strip()
         return clean_output(out)
     except Exception as e:
-        # Log to console; keep app running
         print(f"(Groq) completion error: {e}")
         return ""
 
 def _fallback_summarize(text: str) -> str:
-    """Local fallback: extract 2–3 concise sentences from cleaned text."""
     if not text:
         return ""
-    # Split by sentence punctuation
     parts = re.split(r"(?<=[.!?])\s+", text)
     parts = [p.strip() for p in parts if len(p.strip()) > 0]
-    # Keep sentences that mention actions/behaviors
     prioritized = [p for p in parts if any(k in p.lower() for k in [
         "should", "need to", "needs to", "improve", "ensure", "reduce", "increase",
         "follow", "confirm", "probe", "document", "validate", "summarize", "escalat"
     ])]
     chosen = prioritized[:3] if prioritized else parts[:3]
     summary = " ".join(chosen)
-    # Trim overly long output
     if len(summary) > 600:
         summary = summary[:600].rsplit(" ", 1)[0] + "..."
     return summary
 
-# -----------------------------------------------------------------
 def clean_groq_output(text: str) -> str:
-    if not text:
-        return ""
-    prefixes = [
-        "Here is a concise summary of Areas to Improve:",
-        "Here is a summary of Areas to Improve:",
-        "Based on the raw comments,",
-        "Here are the areas to improve:",
-        "Here are the Areas to Improve:",
-        "Here is the summary of Areas to Improve:"
-
-    ]
-    for p in prefixes:
-        text = text.replace(p, "")
-    return text.strip()
+    return clean_output(text)
 
 def groq_chat_completion(prompt: str, system: str = None) -> str:
-    """
-    Single-call Groq completion with optional system prompt.
-    Uses the Groq SDK directly and enforces very short/unique outputs,
-    with an exact one-line fallback when no improvements exist.
-    """
     try:
         key = GROQ_API_KEY
         if not key:
             print("⚠️ Missing GROQ_API_KEY")
             return ""
-
         client = Groq(api_key=key)
-
-        # Default system message (short, token-efficient, handles "no improvements" case)
         sys_msg = system or (
             "You are a QA coaching assistant.\n"
             "From the raw comments, output only improvement issues.\n"
@@ -294,15 +229,13 @@ def groq_chat_completion(prompt: str, system: str = None) -> str:
             "- No strengths, no generic advice, no checklists.\n"
             '- If no improvements, respond exactly: "Analyst performed well. No improvement as of now."'
         )
-
         response = client.chat.completions.create(
-            model=DEFAULT_GROQ_MODEL,   # keep your existing default model constant
+            model=DEFAULT_GROQ_MODEL,
             messages=[
                 {"role": "system", "content": sys_msg},
                 {"role": "user", "content": prompt},
             ],
         )
-
         if response and response.choices:
             raw = response.choices[0].message.content or ""
             try:
@@ -315,36 +248,21 @@ def groq_chat_completion(prompt: str, system: str = None) -> str:
         return ""
 
 def synthesize_areas_to_improve(all_comments: List[str], employee_name: str, seed_examples: List[str]) -> str:
-    """
-    Clean + combine comments, one single Groq call (no batch).
-    Keeps the output as 2–3 sentences focusing on concrete improvements.
-    """
-    # Use the same basic normalization guard as earlier code relied on.
     try:
         cleaned_bits = [c.strip() for c in (all_comments or []) if _norm(c)]
     except NameError:
-        # If _norm is not available in this scope, apply a minimal filter.
         cleaned_bits = [c.strip() for c in (all_comments or []) if isinstance(c, str) and c.strip()]
-
     if not cleaned_bits:
         return ""
-
     combined = " ".join(cleaned_bits)
-
-    # Include up to 6 seed examples as style hints, compact form.
-    example_hint = " | ".join([s.strip() for s in (seed_examples or []) if s and s.strip()][:6])
-
     user_prompt = (
         f"Raw observations (cleaned): {combined}\n"
         + "Write only 2–3 sentences focusing on specific improvement actions and missed steps. "
-          "Avoid strengths, disclaimers, or generic best practices.Do not include personally identifiable customer data."
+          "Avoid strengths, disclaimers, or generic best practices. Do not include personally identifiable customer data."
     )
-
     return groq_chat_completion(user_prompt)
 
-
 # ========================= EXTRACTION LAYER ========================= #
-
 COLUMN_CANDIDATES = {
     "employee_name": ["Employee Name", "Analyst Name", "Trainee", "Analyst", "Name"],
     "trainee_name": ["Trainee", "Trainee Name", "Analyst Name", "Employee Name", "Analyst"],
@@ -396,24 +314,17 @@ def get_week_filter_mask(df: pd.DataFrame, week_col: Optional[str], date_col: Op
     return mask.fillna(False)
 
 # ========================= CORE PIPELINE ========================= #
-
 def generate_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int, week_n: int,
                      seed_examples: List[str]) -> pd.DataFrame:
     m_cols = extract_people_fields(manual_df)
     s_cols = extract_people_fields(sn_df)
-
-    # Filter by selected month/week (when possible)
     m_mask = get_week_filter_mask(manual_df, m_cols["week_col"], m_cols["date_col"], month_n, week_n)
     s_mask = get_week_filter_mask(sn_df, s_cols["week_col"], s_cols["date_col"], month_n, week_n)
     mdf = manual_df[m_mask].copy() if len(manual_df) else manual_df.copy()
     sdf = sn_df[s_mask].copy() if len(sn_df) else sn_df.copy()
-
-    # Build the union employee set
     manual_names = mdf[m_cols["name_col"]].dropna().astype(str).map(build_employee_key) if m_cols["name_col"] else pd.Series([], dtype=str)
     sn_names = sdf[s_cols["name_col"]].dropna().astype(str).map(build_employee_key) if s_cols["name_col"] else pd.Series([], dtype=str)
     all_names = sorted(set(manual_names.dropna()).union(set(sn_names.dropna())))
-
-    # Aggregate helpers
     def per_employee(df: pd.DataFrame, cols: Dict[str, str]) -> Dict[str, Dict[str, list]]:
         d = defaultdict(lambda: {"team_leads": [], "assessors": [], "comments": [], "sn_ratings": [], "manual_grades": []})
         if df is None or df.empty or not cols.get("name_col"):
@@ -433,10 +344,8 @@ def generate_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int,
             if sr is not None: d[name]["sn_ratings"].append(sr)
             if mg is not None: d[name]["manual_grades"].append(mg)
         return d
-
     agg_manual = per_employee(mdf, m_cols)
     agg_sn = per_employee(sdf, s_cols)
-
     records = []
     for name in all_names:
         team_leads = agg_manual[name]["team_leads"] + agg_sn[name]["team_leads"]
@@ -444,28 +353,22 @@ def generate_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int,
         comments = agg_manual[name]["comments"] + agg_sn[name]["comments"]
         sn_ratings = pd.to_numeric(pd.Series(agg_sn[name]["sn_ratings"]), errors="coerce").dropna().tolist()
         manual_grades_series = pd.Series(agg_manual[name]["manual_grades"])
-
-        # Derive fields
         team_lead_final = None
         if team_leads:
             c = Counter([_norm(tl) for tl in team_leads if _norm(tl)])
             team_lead_final = c.most_common(1)[0][0] if c else None
         assessors_final = ", ".join(sorted(set([_norm(a) for a in assessors if _norm(a)]))) or None
-
         service_now_count = len(sn_ratings)
         service_now_avg = round(float(np.mean(sn_ratings)), 2) if sn_ratings else None
-
         manual_count = len(agg_manual[name]["manual_grades"]) if agg_manual[name]["manual_grades"] else 0
         manual_avg = average_of_grades(manual_grades_series) if manual_count else None
-
         areas_text = synthesize_areas_to_improve(comments, name, seed_examples)
-
         rec = {
             "Employee Name": name,
-            "Emp ID": "",  # intentionally blank
-            "Organization": "",  # intentionally blank
+            "Emp ID": "",
+            "Organization": "",
             "Team Lead": team_lead_final or "",
-            "Status": "",  # intentionally blank
+            "Status": "",
             "Quality Assessors": assessors_final or "",
             "Week": f"{dt.date(1900, month_n, 1).strftime('%b')} - Week {week_n}",
             "Service Now Assessments Count": service_now_count if service_now_count else "",
@@ -475,7 +378,6 @@ def generate_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int,
             "Areas to Improve": areas_text,
         }
         records.append(rec)
-
     tracker = pd.DataFrame.from_records(records)
     col_order = [
         "Employee Name", "Emp ID", "Organization", "Team Lead", "Status", "Quality Assessors", "Week",
@@ -486,7 +388,6 @@ def generate_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int,
     return tracker
 
 # ========================= CATEGORY CLASSIFIER ========================= #
-
 QUALITY_CATEGORIES = [
     "Chat Msg", "CI & Category", "Resolution Note & Code", "Remote session disclaimer",
     "KB Info", "Teams & Service Now integration", "Preferred contact",
@@ -511,13 +412,12 @@ def _fallback_classify(text: str) -> str:
     for keys, label in _keyword_map:
         if any(k in T for k in keys):
             return label
-    return "Work notes"  # safe default
+    return "Work notes"
+
 @st.cache_data
 def categorize_quality_parameter(areas_text: str) -> str:
-    """Classify 'Areas to Improve' into exactly ONE known category, or blank if no improvement needed."""
     if not areas_text or str(areas_text).strip() == "":
         return ""
-
     system = "You are a strict classifier for ticket QA."
     prompt = f"""
 You must classify the following feedback into EXACTLY ONE category.
@@ -534,11 +434,9 @@ RULES:
 TEXT:
 {areas_text}
     """.strip()
-
     result = groq_chat_completion(prompt, system=system)
     if result:
         try:
-            # Ensure we only extract the category from JSON
             import json
             parsed = json.loads(result.strip().split("\n")[0])
             cat = parsed.get("category", "").strip()
@@ -546,17 +444,10 @@ TEXT:
                 return cat
         except Exception:
             pass
-        # fallback if model output not clean
         return _fallback_classify(areas_text)
-
     return _fallback_classify(areas_text)
 
-
-
-
 # ========================= PERFORMANCE HELPERS (NEW) ========================= #
-
-# NEW: simple performance score (avg of available numeric averages)
 def _row_perf_score(row: pd.Series) -> float:
     vals = []
     for col in ["Service Now Assessments Average Rating", "Manual Assessments Average Rating"]:
@@ -567,43 +458,191 @@ def _row_perf_score(row: pd.Series) -> float:
         except Exception:
             pass
     return float(np.mean(vals)) if vals else float("nan")
+
 @st.cache_data
 def compute_categories(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute categories ONCE for rows missing them.
-    Groq will only be called for rows without a category.
-    """
     df = df.copy()
     if "Quality Parameter Category" not in df.columns:
         df["Quality Parameter Category"] = ""
-
     for idx, row in df.iterrows():
         cur_val = str(row.get("Quality Parameter Category", "")).strip()
         if cur_val == "" or cur_val.lower() in ["nan", "none"]:
+            # only compute for blanks -- this triggers Groq only when necessary
             cat = categorize_quality_parameter(row.get("Areas to Improve", ""))
             df.at[idx, "Quality Parameter Category"] = cat
     return df
-# NEW: month-wide tracker (aggregate all 1..5 weeks for selected month)
+
 def _build_month_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int, seed_examples: List[str]) -> pd.DataFrame:
     frames = []
     for wk in [1, 2, 3, 4, 5]:
         t = generate_tracker(manual_df, sn_df, month_n, wk, seed_examples)
         if not t.empty:
-            # ensure category for each sub-tracker
             t["Quality Parameter Category"] = t["Areas to Improve"].apply(categorize_quality_parameter).astype(str).str.strip()
             frames.append(t)
     if not frames:
         return pd.DataFrame()
     month_tracker = pd.concat(frames, ignore_index=True)
-
-    # For month-wide top performer, compute a score per person (mean of their per-row scores)
     if not month_tracker.empty:
         month_tracker["__score__"] = month_tracker.apply(_row_perf_score, axis=1)
     return month_tracker
 
-# ========================= STREAMLIT APP ========================= #
+# ========================= UI helpers ========================= #
+def ensure_session_defaults():
+    if "weekly_trackers" not in st.session_state:
+        st.session_state["weekly_trackers"] = []  # list of per-week tracker DataFrames
+    if "view" not in st.session_state:
+        st.session_state["view"] = None
+    if "tracker" not in st.session_state:
+        st.session_state["tracker"] = pd.DataFrame()
 
+def register_weekly_tracker(tracker_df: pd.DataFrame):
+    if tracker_df is None or tracker_df.empty:
+        return
+    # keep a copy
+    week_copy = tracker_df.copy()
+    # compute score for this weekly df
+    if "__score__" not in week_copy.columns:
+        week_copy["__score__"] = week_copy.apply(_row_perf_score, axis=1)
+    # store list
+    lst = st.session_state.get("weekly_trackers", [])
+    lst.append(week_copy)
+    st.session_state["weekly_trackers"] = lst
+
+def render_treemap(tracker_df: pd.DataFrame):
+    import plotly.express as px
+    _tmp = tracker_df.copy()
+    _tmp["Quality Parameter Category"] = _tmp.get("Quality Parameter Category", "").astype(str).str.strip()
+    _tmp = _tmp[_tmp["Quality Parameter Category"].notna()]
+    _tmp = _tmp[_tmp["Quality Parameter Category"].str.strip().ne("")]
+    if _tmp.empty:
+        st.info("No missing quality parameters to visualize for this week.")
+        return
+    category_counts = (
+        _tmp["Quality Parameter Category"]
+        .value_counts()
+        .rename_axis("Category")
+        .reset_index(name="Count")
+    )
+    category_counts["Label"] = category_counts.apply(lambda r: f"{r['Category']}, {int(r['Count'])}", axis=1)
+    fig = px.treemap(category_counts, path=["Label"], values="Count", title="Missing Quality Parameters (Auto-Categorized)")
+    fig.update_traces(hovertemplate="<b>%{label}</b><extra></extra>")
+    st.plotly_chart(fig, use_container_width=True)
+
+def show_quick_views():
+    tracker = st.session_state.get("tracker", pd.DataFrame())
+    if tracker is None or tracker.empty:
+        st.info("No tracker available. Generate a tracker or upload a saved tracker.")
+        return
+
+    # Ensure categories exist, but compute only if blanks (compute_categories is cached)
+    if "Quality Parameter Category" not in tracker.columns or tracker["Quality Parameter Category"].isnull().any() or (tracker["Quality Parameter Category"].astype(str).str.strip() == "").any():
+        # This will only call groq for rows missing category (per compute_categories implementation)
+        tracker = compute_categories(tracker)
+        st.session_state["tracker"] = tracker  # persist filled categories
+
+    # Category filter view
+    st.markdown("### 📂 View by Quality Parameter Category")
+    cats = sorted([c for c in tracker["Quality Parameter Category"].dropna().unique() if str(c).strip() != ""])
+    if cats:
+        sel_cat = st.selectbox("Select a Quality Parameter Category", ["(all)"] + cats, key="cat_select")
+        if sel_cat and sel_cat != "(all)":
+            cat_df = tracker[tracker["Quality Parameter Category"] == sel_cat].copy()
+            st.subheader(f"🔎 Records for category: {sel_cat}")
+            st.dataframe(cat_df, use_container_width=True, hide_index=True)
+            st.subheader(f"⚠️ Analysts with Missing Criteria in {sel_cat}")
+            missing_df = cat_df[["Employee Name", "Team Lead", "Quality Assessors", "Areas to Improve"]]
+            if not missing_df.empty:
+                st.dataframe(missing_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("✅ No analysts missing this criteria.")
+        else:
+            st.dataframe(tracker, use_container_width=True, hide_index=True)
+    else:
+        st.info("No categorized records found.")
+        st.dataframe(tracker, use_container_width=True, hide_index=True)
+
+    # Quick Views buttons
+    st.markdown("### Quick Views")
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        if st.button("🏆 View Top Performer (Selected Week)", key="btn_top_week"):
+            st.session_state["view"] = "top_week"
+    with col_b:
+        if st.button("🏅 View Top Performer (Selected Month)", key="btn_top_month"):
+            st.session_state["view"] = "top_month"
+    with col_c:
+        if st.button("⚠️ Agents with Missing Criteria (Improvements Needed)", key="btn_improve"):
+            st.session_state["view"] = "needs_improve"
+
+    # Render selected view
+    view = st.session_state.get("view")
+    if view == "top_week":
+        wk_df = st.session_state["tracker"].copy()
+        if "__score__" not in wk_df.columns:
+            wk_df["__score__"] = wk_df.apply(_row_perf_score, axis=1)
+        wk_df["_rank"] = wk_df["__score__"].rank(method="min", ascending=False)
+        top_score = wk_df["__score__"].max()
+        top_week = wk_df[wk_df["__score__"] == top_score].sort_values(["__score__", "Employee Name"], ascending=[False, True])
+        st.subheader("🏆 Top Performer — Selected Week")
+        st.dataframe(top_week.drop(columns=["_rank"], errors="ignore"), use_container_width=True, hide_index=True)
+        if st.button("◀ Back", key="back_from_week"):
+            st.session_state["view"] = None
+
+    elif view == "top_month":
+        # Build month-to-date tracker from available weekly trackers if present
+        month_tracker = None
+        # If we have weekly_trackers list built in session, use it
+        wk_list = st.session_state.get("weekly_trackers", [])
+        if wk_list:
+            with st.spinner("Building month-to-date tracker from available weeks…"):
+                try:
+                    month_tracker = pd.concat(wk_list, ignore_index=True)
+                    if "__score__" not in month_tracker.columns:
+                        month_tracker["__score__"] = month_tracker.apply(_row_perf_score, axis=1)
+                    # aggregate per employee
+                    month_tracker = month_tracker.groupby("Employee Name", as_index=False).agg({"__score__": "sum"})
+                except Exception as e:
+                    st.error(f"Could not build month-to-date tracker from weekly trackers: {e}")
+                    month_tracker = None
+        elif "uploaded_tracker_df" in st.session_state:
+            with st.spinner("Aggregating from uploaded coaching tracker…"):
+                month_tracker = st.session_state["uploaded_tracker_df"].copy()
+                if "__score__" not in month_tracker.columns:
+                    month_tracker["__score__"] = month_tracker.apply(_row_perf_score, axis=1)
+                month_tracker = month_tracker.groupby("Employee Name", as_index=False).agg({"__score__": "sum"})
+        else:
+            # fallback: use current tracker as the only available week
+            with st.spinner("Using current weekly tracker as month-to-date (only available week)…"):
+                month_tracker = st.session_state["tracker"].copy()
+                if "__score__" not in month_tracker.columns:
+                    month_tracker["__score__"] = month_tracker.apply(_row_perf_score, axis=1)
+                month_tracker = month_tracker.groupby("Employee Name", as_index=False).agg({"__score__": "sum"})
+
+        if month_tracker is not None and not month_tracker.empty:
+            top_score = month_tracker["__score__"].max()
+            top_month = month_tracker[month_tracker["__score__"] == top_score].sort_values(["__score__", "Employee Name"], ascending=[False, True])
+            st.subheader("🏅 Top Performer — Month-to-Date (Based on Available Weeks)")
+            st.dataframe(top_month.drop(columns=["__score__"], errors="ignore"), use_container_width=True, hide_index=True)
+        else:
+            st.info("No data available to compute month-to-date performer. Generate at least one weekly tracker or upload a saved tracker.")
+        if st.button("◀ Back", key="back_from_month"):
+            st.session_state["view"] = None
+
+    elif view == "needs_improve":
+        need_improve = st.session_state["tracker"][
+            st.session_state["tracker"]["Quality Parameter Category"].notna()
+            & st.session_state["tracker"]["Quality Parameter Category"].astype(str).str.strip().ne("")
+            & st.session_state["tracker"]["Quality Parameter Category"].astype(str).str.lower().ne("nan")
+        ].copy()
+        st.subheader("⚠️ Agents with Improvement Criteria Identified")
+        st.dataframe(need_improve, use_container_width=True, hide_index=True)
+        if st.button("◀ Back", key="back_from_needs"):
+            st.session_state["view"] = None
+
+# ========================= STREAMLIT APP ========================= #
 def main():
+    ensure_session_defaults()
+
     if st.button("Back to Homepage", key="heat_back_homepage"):
         st.session_state["current_app"] = "Homepage"
         st.rerun()
@@ -618,139 +657,58 @@ def main():
     with st.sidebar:
         st.header("Inputs")
         weekly_file = st.file_uploader(
-            "Upload Weekly Coaching Assessment Report (.xlsx)", type=["xlsx"], accept_multiple_files=False
+            "Upload Weekly Coaching Assessment Report (.xlsx)", type=["xlsx"], accept_multiple_files=False, key="sidebar_weekly"
         )
         st.write(":blue[Sheets required: 'Manual Assessments Data' and 'ServiceNow Coaching Assessment']")
         sample_tracker = st.file_uploader(
             "(Optional) Upload historical Coaching Assessment Tracker for example phrases (.xlsx)",
             type=["xlsx"],
             accept_multiple_files=False,
-            help="Used only to seed the style of 'Areas to Improve' (no PII stored)."
+            help="Used only to seed the style of 'Areas to Improve' (no PII stored).",
+            key="sidebar_sample"
         )
         saved_tracker_file = st.file_uploader(
             "📂 (Optional) Upload an already saved Coaching Assessment Tracker (.xlsx)",
             type=["xlsx"],
             accept_multiple_files=False,
-            help="Use this if you already have a generated tracker and want to view/analyze it."
+            help="Use this if you already have a generated tracker and want to view/analyze it.",
+            key="sidebar_saved"
         )
         month_name_to_num = {m: i for i, m in enumerate(
             ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], start=1)}
-        month = st.selectbox("Month", list(month_name_to_num.keys()), index=dt.date.today().month - 1)
+        month = st.selectbox("Month", list(month_name_to_num.keys()), index=dt.date.today().month - 1, key="sidebar_month")
         week = st.selectbox("Week of month", [1, 2, 3, 4, 5],
-                            index=min(4, week_of_month(dt.date.today()) - 1))
-        do_generate = st.button("Generate Tracker", type="primary")
+                            index=min(4, week_of_month(dt.date.today()) - 1), key="sidebar_week")
+        do_generate = st.button("Generate Tracker", type="primary", key="sidebar_generate")
 
     st.warning("Emp ID, Organization, and Status are intentionally left blank. Please enrich later from HRIS.")
 
-    # --- CASE 1: Load from already saved tracker ---
+    # ----- Handle uploaded saved tracker FIRST (if present) -----
     if saved_tracker_file:
         try:
-            tracker = pd.read_excel(saved_tracker_file, sheet_name="Coaching Tracker").drop(columns=["Unnamed: 0"],errors="ignore")
-            # Ensure category column exists on load
-            if "Quality Parameter Category" not in tracker.columns:
-                tracker["Quality Parameter Category"] = tracker["Areas to Improve"].apply(categorize_quality_parameter).astype(str).str.strip()
+            tracker = pd.read_excel(saved_tracker_file, sheet_name="Coaching Tracker").drop(columns=["Unnamed: 0"], errors="ignore")
+            # persist uploaded tracker (useful for month aggregation)
+            # compute categories only if missing (compute_categories will call groq only for missing rows)
+            if "Quality Parameter Category" not in tracker.columns or tracker["Quality Parameter Category"].isnull().any() or (tracker["Quality Parameter Category"].astype(str).str.strip() == "").any():
+                tracker = compute_categories(tracker)
+            # compute __score__
+            if "__score__" not in tracker.columns:
+                tracker["__score__"] = tracker.apply(_row_perf_score, axis=1)
             st.session_state["tracker"] = tracker
+            st.session_state["uploaded_tracker_df"] = tracker.copy()
             st.success(f"✅ Loaded saved tracker. Rows: {len(tracker)}")
-            st.dataframe(tracker.drop(columns=["Unnamed: 0"], errors="ignore"), use_container_width=True, hide_index=True)
-
-            # Treemap (exclude blanks; label "Category, Count")
-            _tmp = tracker.copy()
-
-            # Clean the category column
-            _tmp["Quality Parameter Category"] = (
-                _tmp["Quality Parameter Category"]
-                .astype(str)                # ensure string
-                .str.strip()                # trim spaces
-                .replace({'"': '', "''": '', '""': '', "nan": "", "None": ""}, regex=False)
-            )
-
-            # Drop truly empty after cleaning
-            _tmp = _tmp[_tmp["Quality Parameter Category"] != ""]
-
-            import plotly.express as px
-            if not _tmp.empty:
-                category_counts = (
-                    _tmp["Quality Parameter Category"]
-                    .value_counts()
-                    .rename_axis("Category")
-                    .reset_index(name="Count")
-                )
-                category_counts["Label"] = category_counts.apply(lambda r: f"{r['Category']}, {int(r['Count'])}", axis=1)
-                fig = px.treemap(category_counts, path=["Label"], values="Count",
-                                 title="Missing Quality Parameters (Auto-Categorized)")
-                fig.update_traces(hovertemplate="<b>%{label}</b><extra></extra>")
-                st.plotly_chart(fig, use_container_width=True)
-            # ========================= CATEGORY FILTER VIEW ========================= #
-            st.markdown("### 📂 View by Quality Parameter Category")
-
-            if "tracker" in st.session_state and not st.session_state["tracker"].empty:
-                tracker = st.session_state["tracker"]
-
-                # Unique categories (excluding blanks)
-                categories = sorted(
-                    [c for c in tracker["Quality Parameter Category"].dropna().unique() if str(c).strip() != ""]
-                )
-
-                if categories:
-                    sel_cat = st.selectbox("Select a Quality Parameter Category", categories)
-
-                    if sel_cat:
-                        cat_df = tracker[tracker["Quality Parameter Category"] == sel_cat].copy()
-                        st.subheader(f"🔎 Records for category: {sel_cat}")
-                        st.dataframe(cat_df, use_container_width=True, hide_index=True)
-
-                        # Highlight analysts missing criteria (those present in this category)
-                        st.subheader(f"⚠️ Analysts with Missing Criteria in {sel_cat}")
-                        missing_df = cat_df[["Employee Name", "Team Lead", "Quality Assessors", "Areas to Improve"]]
-                        if not missing_df.empty:
-                            st.dataframe(missing_df, use_container_width=True, hide_index=True)
-                        else:
-                            st.info("✅ No analysts missing this criteria.")
-                else:
-                    st.info("No categorized records found.")
-
-            # Quick Views
-            st.markdown("### Quick Views")
-            col_a, col_b, col_c = st.columns(3)
-            with col_a:
-                btn_top_week = st.button("🏆 View Top Performer (Selected Week)")
-            with col_b:
-                btn_top_month = st.button("🏅 View Top Performer (Selected Month)")
-            with col_c:
-                btn_improve = st.button("⚠️ Agents with Missing Criteria (Improvements Needed)")
-
-            tracker["__score__"] = tracker.apply(_row_perf_score, axis=1)
-
-            if btn_top_week:
-                wk_df = tracker.copy()
-                wk_df["_rank"] = wk_df["__score__"].rank(method="min", ascending=False)
-                top_score = wk_df["__score__"].max()
-                top_week = wk_df[wk_df["__score__"] == top_score].sort_values(["__score__", "Employee Name"], ascending=[False, True])
-                st.subheader("Top Performer — Selected Week")
-                st.dataframe(top_week.drop(columns=["_rank"]), use_container_width=True, hide_index=True)
-
-            if btn_top_month:
-                top_score=tracker["__score__"].max()
-                top_month = tracker[tracker["__score__"] == top_score].sort_values(["__score__","Employee Name"], ascending=[False, True])
-                st.subheader("Top Performer — Selected Month")
-                st.dataframe(top_month, use_container_width=True, hide_index=True)
-
-            if btn_improve:
-                need_improve = tracker[
-                    tracker["Quality Parameter Category"].notna() &
-                    tracker["Quality Parameter Category"].str.strip().ne("") &
-                    tracker["Quality Parameter Category"].str.lower().ne("nan")
-                ].copy()
-                st.subheader("Agents with Improvement Criteria Identified")
-                st.dataframe(need_improve, use_container_width=True, hide_index=True)
-
+            st.dataframe(tracker, use_container_width=True, hide_index=True)
+            # show treemap and quick views (common)
+            render_treemap(tracker)
+            show_quick_views()
+            return
         except Exception as e:
             st.error("Could not read uploaded tracker.")
             st.exception(e)
             st.stop()
 
-    # --- CASE 2: Generate new tracker from weekly report ---
-    elif weekly_file:
+    # ----- Handle weekly report generation -----
+    if weekly_file:
         try:
             xls = pd.ExcelFile(weekly_file)
             def find_sheet(target: str) -> Optional[str]:
@@ -758,16 +716,13 @@ def main():
                     if target.lower() in s.lower():
                         return s
                 return None
-
             manual_sheet = find_sheet("Manual Assessments Data") or find_sheet("Manual") or find_sheet("Assessments")
             sn_sheet = find_sheet("ServiceNow Coaching Assessment") or find_sheet("ServiceNow") or find_sheet("Coaching")
-
             if not manual_sheet or not sn_sheet:
                 st.error("Could not find required sheets. Ensure workbook has 'Manual Assessments Data' and 'ServiceNow Coaching Assessment'.")
                 st.stop()
-
-            manual_df = pd.read_excel(xls, manual_sheet).drop(columns=["Unnamed: 0"],errors="ignore")
-            sn_df = pd.read_excel(xls, sn_sheet).drop(columns=["Unnamed: 0"],errors="ignore")
+            manual_df = pd.read_excel(xls, manual_sheet).drop(columns=["Unnamed: 0"], errors="ignore")
+            sn_df = pd.read_excel(xls, sn_sheet).drop(columns=["Unnamed: 0"], errors="ignore")
         except Exception as e:
             st.exception(e)
             st.stop()
@@ -797,23 +752,21 @@ def main():
         if do_generate:
             with st.spinner("Generating tracker…"):
                 tracker = generate_tracker(manual_df, sn_df, month_n, week_n, seed_examples)
-
-            # Store inputs for month-wide view
+            # compute categories for missing rows only
+            if "Quality Parameter Category" not in tracker.columns or tracker["Quality Parameter Category"].isnull().any() or (tracker["Quality Parameter Category"].astype(str).str.strip() == "").any():
+                tracker = compute_categories(tracker)
+            # compute scores and persist
+            if "__score__" not in tracker.columns:
+                tracker["__score__"] = tracker.apply(_row_perf_score, axis=1)
+            st.session_state["tracker"] = tracker
+            # store raw data and weekly tracker for month-to-date combining
             st.session_state["manual_df_raw"] = manual_df.copy()
             st.session_state["sn_df_raw"] = sn_df.copy()
-            st.session_state["selected_month_n"] = month_n
-            st.session_state["selected_week_n"] = week_n
-
-            # Add category now so downstream visuals are ready
-            tracker["Quality Parameter Category"] = tracker["Areas to Improve"].apply(categorize_quality_parameter).astype(str).str.strip()
-
-            st.session_state["tracker"] = tracker
+            register_weekly_tracker(tracker)  # append to weekly list (so month aggregation uses available weeks)
             st.success(f"Tracker generated for {month} – Week {week_n}. Rows: {len(tracker)}")
+            st.dataframe(tracker, use_container_width=True, hide_index=True)
 
-            # Keep tracker visible
-            st.dataframe(tracker, use_container_width=True)
-
-            # Download button (keep)
+            # save for download
             out = io.BytesIO()
             with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
                 tracker.to_excel(writer, index=False, sheet_name="Coaching Tracker")
@@ -824,100 +777,22 @@ def main():
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-            # Treemap directly after tracker; exclude blanks and label "Category, Count"
-            import plotly.express as px
+            # visuals + quick views
+            render_treemap(tracker)
+            show_quick_views()
+            return
 
-            _tmp = tracker.copy()
-            _tmp = _tmp[_tmp["Quality Parameter Category"].notna()]
-            _tmp = _tmp[_tmp["Quality Parameter Category"].str.strip().ne("")]
-            _tmp = _tmp[_tmp["Quality Parameter Category"].str.lower().ne("nan")]
-
-            if not _tmp.empty:
-                category_counts = (
-                    _tmp["Quality Parameter Category"]
-                    .value_counts()
-                    .rename_axis("Category")
-                    .reset_index(name="Count")
-                )
-                category_counts["Label"] = category_counts.apply(lambda r: f"{r['Category']}, {int(r['Count'])}", axis=1)
-
-                fig = px.treemap(
-                    category_counts,
-                    path=["Label"],   # shows "Work notes, 20"
-                    values="Count",
-                    title="Missing Quality Parameters (Auto-Categorized)",
-                )
-                fig.update_traces(hovertemplate="<b>%{label}</b><extra></extra>")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No missing quality parameters to visualize for this week.")
-
-            # Quick Views: Top performers and improvement filter
-            st.markdown("### Quick Views")
-
-            col_a, col_b, col_c = st.columns(3)
-            with col_a:
-                btn_top_week = st.button("🏆 View Top Performer (Selected Week)")
-            with col_b:
-                btn_top_month = st.button("🏅 View Top Performer (Selected Month)")
-            with col_c:
-                btn_improve = st.button("⚠️ Agents with Missing Criteria (Improvements Needed)")
-
-            # Compute a per-row score for current (week) tracker
-            tracker["__score__"] = tracker.apply(_row_perf_score, axis=1)
-
-            if btn_top_week:
-                wk_df = tracker.copy()
-                wk_df["_rank"] = wk_df["__score__"].rank(method="min", ascending=False)
-                top_score = wk_df["__score__"].max()
-                top_week = wk_df[wk_df["__score__"] == top_score].sort_values(["__score__", "Employee Name"], ascending=[False, True])
-                st.subheader("Top Performer — Selected Week")
-                st.dataframe(top_week.drop(columns=["_rank"]), use_container_width=True, hide_index=True)
-
-            if btn_top_month:
-                manual_df_raw = st.session_state.get("manual_df_raw")
-                sn_df_raw = st.session_state.get("sn_df_raw")
-                sel_month = st.session_state.get("selected_month_n", None)
-
-                if isinstance(manual_df_raw, pd.DataFrame) and isinstance(sn_df_raw, pd.DataFrame) and sel_month:
-                    month_tracker = _build_month_tracker(manual_df_raw, sn_df_raw, sel_month, AREAS_TO_IMPROVE_EXAMPLES)
-                    if month_tracker.empty:
-                        st.info("No data to compute month-wide top performer.")
-                    else:
-                        month_agg = (
-                            month_tracker
-                            .assign(score=lambda d: d.apply(_row_perf_score, axis=1))
-                            .groupby("Employee Name", as_index=False)["score"]
-                            .mean()
-                        )
-                        best = month_agg[month_agg["score"] == month_agg["score"].max()]
-                        # Join back some context (optional)
-                        best_full = best.merge(
-                            month_tracker[["Employee Name", "Team Lead", "Quality Assessors"]].drop_duplicates(),
-                            on="Employee Name",
-                            how="left"
-                        )
-                        st.subheader("Top Performer — Selected Month")
-                        st.dataframe(best_full.sort_values("score", ascending=False), use_container_width=True, hide_index=True)
-                else:
-                    st.warning("Please generate a tracker first to compute month-wide top performer.")
-
-            if btn_improve:
-                need_improve = tracker[
-                    tracker["Quality Parameter Category"].notna() &
-                    tracker["Quality Parameter Category"].str.strip().ne("") &
-                    tracker["Quality Parameter Category"].str.lower().ne("nan")
-                ].copy()
-                st.subheader("Agents with Improvement Criteria Identified")
-                st.dataframe(need_improve, use_container_width=True)
-
-    else:
-        st.info("Upload a Weekly Coaching Report or an already saved Tracker to begin.")
+    # If no files/actions: if any previous tracker in session show it
+    current_tracker = st.session_state.get("tracker")
+    if isinstance(current_tracker, pd.DataFrame) and not current_tracker.empty:
+        st.info("Showing last generated/loaded tracker from this session.")
+        st.dataframe(current_tracker, use_container_width=True, hide_index=True)
+        render_treemap(current_tracker)
+        show_quick_views()
         return
 
-# NOTE: Removed the previous global analysis block with the extra Save button
-# to avoid duplication. Treemap and quick views are rendered right after
-# the tracker is shown (for both generated and loaded cases).
+    st.info("Upload a Weekly Coaching Report or an already saved Tracker to begin.")
+    return
 
 if __name__ == "__main__":
     main()

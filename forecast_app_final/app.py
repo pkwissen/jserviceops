@@ -4,7 +4,7 @@ import subprocess
 import streamlit as st
 from pathlib import Path
 import pandas as pd
-from modules import data_handler, forecaster, planner, shift_plan
+from forecast_app_final.modules import data_handler, forecaster, planner, shift_plan
 import webbrowser
 from datetime import date, timedelta
 

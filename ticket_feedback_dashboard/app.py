@@ -8,10 +8,12 @@ import pandas as pd
 import re
 import plotly.express as px  # For interactive pie charts
 
-from modules.sentiment import classify_sentiment, labels as sentiment_labels
-from modules.topic_modeling import generate_topic_labels
-from modules.analyst_summary import generate_analyst_summary
-from modules.category_count import category_wise_count
+from ticket_feedback_dashboard.modules.sentiment import classify_sentiment, labels as sentiment_labels
+from ticket_feedback_dashboard.modules.topic_modeling import generate_topic_labels
+from ticket_feedback_dashboard.modules.analyst_summary import generate_analyst_summary
+from ticket_feedback_dashboard.modules.category_count import category_wise_count
+
+
 
 def main():
     if st.button("Back to Homepage", key="heat_back_homepage"):
