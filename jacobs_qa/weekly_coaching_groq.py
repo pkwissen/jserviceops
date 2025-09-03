@@ -165,184 +165,51 @@ def clean_output(text: str) -> str:
         text = text.replace(p, "")
     return text.strip()
 
-load_dotenv()
+load_dotenv(dotenv_path="/teamspace/studios/this_studio/jserviceops/.env")
 
-# ========================= GROQ LLM (NO BATCH) ========================= #
+# ========================= OLLAMA LLM (LOCAL, NO API KEYS) ========================= #
+import os
+import re
+import streamlit as st
+from collections import defaultdict
+from typing import Dict, List
+import ollama  # pip install ollama
+
 SYSTEM_SUMMARY = (
     "You are a QA coaching assistant. Summarize ONLY improvement-relevant text "
     "in 2–3 concise sentences (no bullets). Do not mention strengths, generic advice, "
     "or checklists. Be direct and specific."
 )
 
-try:
-    from groq import Groq
-except Exception:
-    Groq = None
-
-
-# Get all available API keys from environment variables
-def get_api_keys_from_env():
-    """Extract all GROQ API keys from environment variables"""
-    api_keys = []
-    # Check for common key patterns
-    key_patterns = [
-        "GROQ_API_KEY_1", "GROQ_API_KEY_2", "GROQ_API_KEY_3", "GROQ_API_KEY_4",
-        "GROQ_API_KEY_5"
-    ]
-
-    # Also check for numbered keys up to 20
-    for i in range(1, 21):
-        key_patterns.append(f"GROQ_API_KEY_{i}")
-
-    # Get all environment variables
-    env_vars = os.environ
-
-    # Extract keys that match our patterns
-    for pattern in key_patterns:
-        if pattern in env_vars and env_vars[pattern].strip():
-            api_keys.append(env_vars[pattern].strip())
-
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_keys = []
-    for key in api_keys:
-        if key not in seen:
-            seen.add(key)
-            unique_keys.append(key)
-
-    return unique_keys
-
-
-# Get API keys from environment
-GROQ_API_KEYS = get_api_keys_from_env()
-
-# Track current key index and usage
-if "groq_key_index" not in st.session_state:
-    st.session_state.groq_key_index = 0
-if "groq_key_limits" not in st.session_state:
-    st.session_state.groq_key_limits = defaultdict(bool)  # True if key hit limit
-
-# Rate limit error patterns
-RATE_LIMIT_PATTERNS = [
-    "rate limit",
-    "quota",
-    "limit exceeded",
-    "too many requests",
-    "429",
-    "insufficient_quota"
-]
-
-
-def is_rate_limit_error(error_msg):
-    """Check if error message indicates a rate limit"""
-    if not error_msg:
-        return False
-    error_lower = error_msg.lower()
-    return any(pattern in error_lower for pattern in RATE_LIMIT_PATTERNS)
-
+# ------------------------------------------------------------------ #
+# Since Ollama is local, no need for API key management
+# ------------------------------------------------------------------ #
+def is_rate_limit_error(_):
+    return False  # no rate limits in local ollama
 
 def get_next_groq_client():
-    """Get the next available Groq client with fallback keys"""
-    if not GROQ_API_KEYS:
-        st.error("No API keys available. Please check your .env file.")
-        return None
+    """Dummy placeholder to match old structure"""
+    return True  # always available (Ollama runs locally)
 
-    # Try current key first if it hasn't hit limit
-    current_index = st.session_state.groq_key_index
-    current_key = GROQ_API_KEYS[current_index]
-
-    if current_key and not st.session_state.groq_key_limits[current_index]:
-        try:
-            client = Groq(api_key=current_key)
-            # Quick test to see if key is valid
-            client.models.list(timeout=5)
-            return client
-        except Exception as e:
-            if is_rate_limit_error(str(e)):
-                st.session_state.groq_key_limits[current_index] = True
-                st.warning(f"API key {current_index + 1} hit rate limit. Switching to next key.")
-            else:
-                print(f"API key {current_index + 1} test failed: {e}")
-
-    # If current key hit limit or failed, try other keys
-    for i in range(1, len(GROQ_API_KEYS)):
-        next_index = (current_index + i) % len(GROQ_API_KEYS)
-        next_key = GROQ_API_KEYS[next_index]
-
-        if next_key and not st.session_state.groq_key_limits[next_index]:
-            try:
-                client = Groq(api_key=next_key)
-                client.models.list(timeout=5)  # Quick test
-                st.session_state.groq_key_index = next_index
-                st.info(f"Switched to API key {next_index + 1}")
-                return client
-            except Exception as e:
-                if is_rate_limit_error(str(e)):
-                    st.session_state.groq_key_limits[next_index] = True
-                    print(f"API key {next_index + 1} hit rate limit during test")
-                else:
-                    print(f"API key {next_index + 1} test failed: {e}")
-                continue
-
-    # If all keys hit limits, try to reset and start from beginning
-    if all(st.session_state.groq_key_limits.get(i, False) for i in range(len(GROQ_API_KEYS))):
-        st.warning("All API keys hit limits. Resetting and trying keys again.")
-        for i in range(len(GROQ_API_KEYS)):
-            st.session_state.groq_key_limits[i] = False  # Reset all limits
-        st.session_state.groq_key_index = 0
-        return get_next_groq_client()  # Recursive call to try again
-
-    st.error("All available API keys have hit rate limits or are invalid.")
-    return None
-
-
+# ------------------------------------------------------------------ #
+# Core Ollama completion
+# ------------------------------------------------------------------ #
 def _groq_complete(messages: List[Dict[str, str]], max_tokens: int = 220) -> str:
-    if not GROQ_API_KEYS:
-        return ""
-
-    client = get_next_groq_client()
-    if not client:
-        return ""
-
     try:
-        resp = client.chat.completions.create(
-            model=DEFAULT_GROQ_MODEL,
+        response = ollama.chat(
+            model="mistral:latest",
             messages=messages,
-            temperature=0.2,
-            max_tokens=max_tokens,
-            timeout=30  # Add timeout to prevent hanging
+            options={"temperature": 0.2, "num_predict": max_tokens}
         )
-        out = (resp.choices[0].message.content or "").strip()
+        out = (response.get("message", {}).get("content", "") or "").strip()
         return clean_output(out)
     except Exception as e:
-        current_index = st.session_state.groq_key_index
-        error_msg = str(e)
-
-        if is_rate_limit_error(error_msg):
-            st.session_state.groq_key_limits[current_index] = True
-            print(f"(Groq) rate limit with key {current_index + 1}: {error_msg}")
-
-            # Try with next key immediately
-            new_client = get_next_groq_client()
-            if new_client:
-                try:
-                    resp = new_client.chat.completions.create(
-                        model=DEFAULT_GROQ_MODEL,
-                        messages=messages,
-                        temperature=0.2,
-                        max_tokens=max_tokens,
-                        timeout=30
-                    )
-                    out = (resp.choices[0].message.content or "").strip()
-                    return clean_output(out)
-                except Exception as retry_e:
-                    print(f"(Groq) retry also failed: {retry_e}")
-        else:
-            print(f"(Groq) completion error with key {current_index + 1}: {error_msg}")
-
+        print(f"(Ollama) completion error: {e}")
         return ""
 
-
+# ------------------------------------------------------------------ #
+# Fallback summarizer (rule-based)
+# ------------------------------------------------------------------ #
 def _fallback_summarize(text: str) -> str:
     if not text:
         return ""
@@ -358,71 +225,48 @@ def _fallback_summarize(text: str) -> str:
         summary = summary[:600].rsplit(" ", 1)[0] + "..."
     return summary
 
-
+# ------------------------------------------------------------------ #
+# Output cleaner
+# ------------------------------------------------------------------ #
 def clean_groq_output(text: str) -> str:
     return clean_output(text)
 
+def clean_output(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
 
+# ------------------------------------------------------------------ #
+# Main function for summarization
+# ------------------------------------------------------------------ #
 def groq_chat_completion(prompt: str, system: str = None) -> str:
-    client = get_next_groq_client()
-    if not client:
-        return ""
+    sys_msg = system or (
+        "You are a QA coaching assistant.\n"
+        "From the raw comments, output only improvement issues.\n"
+        "- Each issue: one short phrase or one short sentence.\n"
+        "- Write each issue on a new line with no numbers, no bullets.\n"
+        "- Merge duplicates; avoid filler and repetition.\n"
+        "- Do not output strengths, generic advice, or checklists.\n"
+        '- If no improvements, respond exactly: "Analyst performed well. No improvement as of now."'
+    )
+
 
     try:
-        sys_msg = system or (
-            "You are a QA coaching assistant.\n"
-            "From the raw comments, output only improvement issues.\n"
-            "- Each issue: a unique, very short phrase or one short sentence.\n"
-            "- Merge duplicates; avoid filler and repetition.\n"
-            "- No strengths, no generic advice, no checklists.\n"
-            '- If no improvements, respond exactly: "Analyst performed well. No improvement as of now."'
-        )
-
-        response = client.chat.completions.create(
-            model=DEFAULT_GROQ_MODEL,
+        response = ollama.chat(
+            model="mistral:latest",
             messages=[
                 {"role": "system", "content": sys_msg},
                 {"role": "user", "content": prompt},
             ],
-            timeout=30  # Add timeout to prevent hanging
+            options={"temperature": 0.2}
         )
 
-        if response and response.choices:
-            raw = response.choices[0].message.content or ""
-            try:
-                return clean_groq_output(raw).strip()
-            except NameError:
-                return (raw or "").strip()
+        if response and response.get("message"):
+            raw = response["message"].get("content", "")
+            return clean_groq_output(raw).strip()
         return ""
     except Exception as e:
-        current_index = st.session_state.groq_key_index
-        error_msg = str(e)
+        print(f"(Ollama) chat error: {e}")
+        return _fallback_summarize(prompt)  # fallback if model fails
 
-        if is_rate_limit_error(error_msg):
-            st.session_state.groq_key_limits[current_index] = True
-            print(f"Groq API rate limit with key {current_index + 1}: {error_msg}")
-
-            # Try with next key immediately
-            new_client = get_next_groq_client()
-            if new_client:
-                try:
-                    response = new_client.chat.completions.create(
-                        model=DEFAULT_GROQ_MODEL,
-                        messages=[
-                            {"role": "system", "content": sys_msg},
-                            {"role": "user", "content": prompt},
-                        ],
-                        timeout=30
-                    )
-                    if response and response.choices:
-                        raw = response.choices[0].message.content or ""
-                        return clean_groq_output(raw).strip()
-                except Exception as retry_e:
-                    print(f"(Groq) retry also failed: {retry_e}")
-        else:
-            print(f"Groq API call failed with key {current_index + 1}: {error_msg}")
-
-        return ""
 
 def synthesize_areas_to_improve(all_comments: List[str], employee_name: str, seed_examples: List[str]) -> str:
     try:
@@ -665,12 +509,17 @@ def _build_month_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: 
 
 # ========================= UI helpers ========================= #
 def ensure_session_defaults():
+    if "groq_key_index" not in st.session_state:
+        st.session_state.groq_key_index = 0
+    if "groq_key_limits" not in st.session_state:
+        st.session_state.groq_key_limits = defaultdict(bool)
     if "weekly_trackers" not in st.session_state:
-        st.session_state["weekly_trackers"] = []  # list of per-week tracker DataFrames
+        st.session_state.weekly_trackers = []
     if "view" not in st.session_state:
-        st.session_state["view"] = None
+        st.session_state.view = None
     if "tracker" not in st.session_state:
-        st.session_state["tracker"] = pd.DataFrame()
+        st.session_state.tracker = pd.DataFrame()
+
 
 def register_weekly_tracker(tracker_df: pd.DataFrame):
     if tracker_df is None or tracker_df.empty:
