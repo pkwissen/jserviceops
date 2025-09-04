@@ -8,11 +8,21 @@ import datetime as dt
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
-
+import subprocess
 import pandas as pd
 import numpy as np
 import streamlit as st
+import time
+def run_setup():
+    setup_path = os.path.join(os.path.dirname(__file__), "setup.sh")
+    try:
+        subprocess.Popen(["bash", setup_path])
+        print("✅ setup.sh started in background")
+    except Exception as e:
+        print(f"⚠️ Failed to run setup.sh: {e}")
 
+# call before launching Streamlit app code
+run_setup()
 # ========================= UI CONSTANTS ========================= #
 APP_TITLE = "Weekly Coaching Assessment Tracker"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
@@ -230,25 +240,59 @@ def _fallback_summarize(text: str) -> str:
 # ------------------------------------------------------------------ #
 def clean_groq_output(text: str) -> str:
     return clean_output(text)
-
-def clean_output(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
-
 # ------------------------------------------------------------------ #
 # Main function for summarization
 # ------------------------------------------------------------------ #
+def ensure_ollama_active(
+    host: str = "http://localhost:11434",
+    setup_script: str = "setup.sh",
+    retries: int = 10,
+    wait_sec: int = 2
+) -> None:
+    """
+    Ensure Ollama is active. If not, attempt to start it via setup.sh.
+    Does not raise errors if it cannot start (safely returns).
+    """
+    def is_active():
+        try:
+            r = requests.get(f"{host}/api/tags", timeout=2)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    if is_active():
+        return
+
+    # Start Ollama
+    subprocess.Popen(["bash", setup_script])
+
+    # Wait for Ollama to become active
+    for _ in range(retries):
+        time.sleep(wait_sec)
+        if is_active():
+            return
+
 def groq_chat_completion(prompt: str, system: str = None) -> str:
     sys_msg = system or (
-        "You are a QA coaching assistant.\n"
-        "From the raw comments, output only improvement issues.\n"
-        "- Each issue: one short phrase or one short sentence.\n"
-        "- Write each issue on a new line with no numbers, no bullets.\n"
-        "- Merge duplicates; avoid filler and repetition.\n"
-        "- Do not output strengths, generic advice, or checklists.\n"
-        '- If no improvements, respond exactly: "Analyst performed well. No improvement as of now."'
+        "You are a QA coaching assistant. "
+        "Extract only improvement issues from the observations. "
+        "Output must be a list of crisp one-line statements, separated by newlines. "
+        "If no issues are found, return exactly: 'No improvements required and good ticket processing'. "
+        "Do not add any explanations, positives, or greetings.\n\n"
+        "Examples of correct output format:\n"
+        "- Computer name missing\n"
+        "- Incorrect CI\n"
+        "- Bomgar chat missing\n"
+        "- Agent did not update the CI and resolution notes in the ticket\n"
+        "- Missed mentioning the KB numbers in the worknotes\n"
+        "OR\n"
+        "No improvements required and good ticket processing"
     )
 
+    # Ensure Ollama is running; if not, start it
+    ensure_ollama_active()
 
+    # Attempt the chat call
     try:
         response = ollama.chat(
             model="mistral:latest",
@@ -258,30 +302,45 @@ def groq_chat_completion(prompt: str, system: str = None) -> str:
             ],
             options={"temperature": 0.2}
         )
-
         if response and response.get("message"):
-            raw = response["message"].get("content", "")
-            return clean_groq_output(raw).strip()
-        return ""
-    except Exception as e:
-        print(f"(Ollama) chat error: {e}")
-        return _fallback_summarize(prompt)  # fallback if model fails
+            return (response["message"].get("content", "") or "").strip()
+        return "No improvements required and good ticket processing"
+    except Exception:
+        return "No improvements required and good ticket processing"
 
+def synthesize_areas_to_improve(
+    all_comments: List[str],
+    service_now_avg: Optional[float] = None,
+    manual_avg: Optional[float] = None,
+) -> str:
+    """
+    Decide whether to skip Ollama call based on averages.
+    If both averages are 10, OR if either one exists and is 10,
+    return 'No improvements required and good ticket processing'.
+    Otherwise, call Ollama to generate improvement areas.
+    """
+    # ---- Fast-path check for perfect scores ----
+    if service_now_avg == 10 and manual_avg == 10:
+        return "No improvements required and good ticket processing"
+    if service_now_avg == 10 and manual_avg is None:
+        return "No improvements required and good ticket processing"
+    if manual_avg == 10 and service_now_avg is None:
+        return "No improvements required and good ticket processing"
 
-def synthesize_areas_to_improve(all_comments: List[str], employee_name: str, seed_examples: List[str]) -> str:
-    try:
-        cleaned_bits = [c.strip() for c in (all_comments or []) if _norm(c)]
-    except NameError:
-        cleaned_bits = [c.strip() for c in (all_comments or []) if isinstance(c, str) and c.strip()]
+    # ---- Fall back to comments analysis ----
+    cleaned_bits = list({c.strip() for c in (all_comments or []) if _norm(c)})
     if not cleaned_bits:
-        return ""
+        return "No improvements required and good ticket processing"
+
     combined = " ".join(cleaned_bits)
     user_prompt = (
-        f"Raw observations (cleaned): {combined}\n"
-        + "Write only 2–3 sentences focusing on specific improvement actions and missed steps. "
-          "Avoid strengths, disclaimers, or generic best practices. Do not include personally identifiable customer data."
+        f"QA observations: {combined}\n\n"
+        "Extract only the improvement issues. "
+        "Write each as a crisp one-line statement, separated by newlines. "
+        "Follow the format shown in the examples."
     )
     return groq_chat_completion(user_prompt)
+
 
 # ========================= EXTRACTION LAYER ========================= #
 COLUMN_CANDIDATES = {
@@ -335,19 +394,35 @@ def get_week_filter_mask(df: pd.DataFrame, week_col: Optional[str], date_col: Op
     return mask.fillna(False)
 
 # ========================= CORE PIPELINE ========================= #
-def generate_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int, week_n: int,
-                     seed_examples: List[str]) -> pd.DataFrame:
+def generate_tracker(
+    manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int, week_n: int,
+    seed_examples: List[str]
+) -> pd.DataFrame:
     m_cols = extract_people_fields(manual_df)
     s_cols = extract_people_fields(sn_df)
+
     m_mask = get_week_filter_mask(manual_df, m_cols["week_col"], m_cols["date_col"], month_n, week_n)
     s_mask = get_week_filter_mask(sn_df, s_cols["week_col"], s_cols["date_col"], month_n, week_n)
+
     mdf = manual_df[m_mask].copy() if len(manual_df) else manual_df.copy()
     sdf = sn_df[s_mask].copy() if len(sn_df) else sn_df.copy()
-    manual_names = mdf[m_cols["name_col"]].dropna().astype(str).map(build_employee_key) if m_cols["name_col"] else pd.Series([], dtype=str)
-    sn_names = sdf[s_cols["name_col"]].dropna().astype(str).map(build_employee_key) if s_cols["name_col"] else pd.Series([], dtype=str)
+
+    manual_names = (
+        mdf[m_cols["name_col"]].dropna().astype(str).map(build_employee_key)
+        if m_cols["name_col"] else pd.Series([], dtype=str)
+    )
+    sn_names = (
+        sdf[s_cols["name_col"]].dropna().astype(str).map(build_employee_key)
+        if s_cols["name_col"] else pd.Series([], dtype=str)
+    )
+
     all_names = sorted(set(manual_names.dropna()).union(set(sn_names.dropna())))
+
     def per_employee(df: pd.DataFrame, cols: Dict[str, str]) -> Dict[str, Dict[str, list]]:
-        d = defaultdict(lambda: {"team_leads": [], "assessors": [], "comments": [], "sn_ratings": [], "manual_grades": []})
+        d = defaultdict(lambda: {
+            "team_leads": [], "assessors": [], "comments": [],
+            "sn_ratings": [], "manual_grades": []
+        })
         if df is None or df.empty or not cols.get("name_col"):
             return d
         for _, row in df.iterrows():
@@ -359,47 +434,80 @@ def generate_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int,
             cm = row.get(cols["comments_col"]) if cols.get("comments_col") else None
             sr = row.get(cols["sn_rating_col"]) if cols.get("sn_rating_col") else None
             mg = row.get(cols["manual_grade_col"]) if cols.get("manual_grade_col") else None
+
             if tl: d[name]["team_leads"].append(str(tl))
             if qa: d[name]["assessors"].append(str(qa))
             if cm: d[name]["comments"].append(str(cm))
             if sr is not None: d[name]["sn_ratings"].append(sr)
             if mg is not None: d[name]["manual_grades"].append(mg)
         return d
+
     agg_manual = per_employee(mdf, m_cols)
     agg_sn = per_employee(sdf, s_cols)
+
     records = []
-    for name in all_names:
-        team_leads = agg_manual[name]["team_leads"] + agg_sn[name]["team_leads"]
-        assessors = agg_manual[name]["assessors"] + agg_sn[name]["assessors"]
-        comments = agg_manual[name]["comments"] + agg_sn[name]["comments"]
-        sn_ratings = pd.to_numeric(pd.Series(agg_sn[name]["sn_ratings"]), errors="coerce").dropna().tolist()
-        manual_grades_series = pd.Series(agg_manual[name]["manual_grades"])
-        team_lead_final = None
-        if team_leads:
-            c = Counter([_norm(tl) for tl in team_leads if _norm(tl)])
-            team_lead_final = c.most_common(1)[0][0] if c else None
-        assessors_final = ", ".join(sorted(set([_norm(a) for a in assessors if _norm(a)]))) or None
-        service_now_count = len(sn_ratings)
-        service_now_avg = round(float(np.mean(sn_ratings)), 2) if sn_ratings else None
-        manual_count = len(agg_manual[name]["manual_grades"]) if agg_manual[name]["manual_grades"] else 0
-        manual_avg = average_of_grades(manual_grades_series) if manual_count else None
-        areas_text = synthesize_areas_to_improve(comments, name, seed_examples)
-        rec = {
-            "Employee Name": name,
-            "Emp ID": "",
-            "Organization": "",
-            "Team Lead": team_lead_final or "",
-            "Status": "",
-            "Quality Assessors": assessors_final or "",
-            "Week": f"{dt.date(1900, month_n, 1).strftime('%b')} - Week {week_n}",
-            "Service Now Assessments Count": service_now_count if service_now_count else "",
-            "Service Now Assessments Average Rating": service_now_avg if service_now_avg is not None else "",
-            "Manual Assessments Count": manual_count if manual_count else "",
-            "Manual Assessments Average Rating": manual_avg if manual_avg is not None else "",
-            "Areas to Improve": areas_text,
-        }
-        records.append(rec)
+
+    # 🔹 Progress bar + spinner
+    total = len(all_names)
+    progress_bar = st.progress(0, text="Starting employee processing...")
+    counter = 0
+
+    with st.spinner("⏳ Generating Areas to Improve for employees..."):
+        for name in all_names:
+            team_leads = agg_manual[name]["team_leads"] + agg_sn[name]["team_leads"]
+            assessors = agg_manual[name]["assessors"] + agg_sn[name]["assessors"]
+            comments = agg_manual[name]["comments"] + agg_sn[name]["comments"]
+
+            sn_ratings = pd.to_numeric(pd.Series(agg_sn[name]["sn_ratings"]), errors="coerce").dropna().tolist()
+            manual_grades_series = pd.Series(agg_manual[name]["manual_grades"])
+
+            team_lead_final = None
+            if team_leads:
+                c = Counter([_norm(tl) for tl in team_leads if _norm(tl)])
+                team_lead_final = c.most_common(1)[0][0] if c else None
+
+            assessors_final = ", ".join(sorted(set([_norm(a) for a in assessors if _norm(a)]))) or None
+
+            service_now_count = len(sn_ratings)
+            service_now_avg = round(float(np.mean(sn_ratings)), 2) if sn_ratings else None
+
+            manual_count = len(agg_manual[name]["manual_grades"]) if agg_manual[name]["manual_grades"] else 0
+            manual_avg = average_of_grades(manual_grades_series) if manual_count else None
+
+            # 🔹 Apply skip-logic before calling Ollama
+            if (service_now_avg == 10 and manual_avg == 10) or \
+               (service_now_avg == 10 and manual_avg is None) or \
+               (manual_avg == 10 and service_now_avg is None):
+                areas_text = "No improvements required and good ticket processing"
+            else:
+                areas_text = synthesize_areas_to_improve(
+                    comments,
+                    service_now_avg=service_now_avg,
+                    manual_avg=manual_avg
+                )
+
+            rec = {
+                "Employee Name": name,
+                "Emp ID": "",
+                "Organization": "",
+                "Team Lead": team_lead_final or "",
+                "Status": "",
+                "Quality Assessors": assessors_final or "",
+                "Week": f"{dt.date(1900, month_n, 1).strftime('%b')} - Week {week_n}",
+                "Service Now Assessments Count": service_now_count if service_now_count else "",
+                "Service Now Assessments Average Rating": service_now_avg if service_now_avg is not None else "",
+                "Manual Assessments Count": manual_count if manual_count else "",
+                "Manual Assessments Average Rating": manual_avg if manual_avg is not None else "",
+                "Areas to Improve": areas_text,
+            }
+            records.append(rec)
+
+            # 🔹 Update progress bar
+            counter += 1
+            progress_bar.progress(counter / total, text=f"Processing {counter}/{total} employees")
+
     tracker = pd.DataFrame.from_records(records)
+
     col_order = [
         "Employee Name", "Emp ID", "Organization", "Team Lead", "Status", "Quality Assessors", "Week",
         "Service Now Assessments Count", "Service Now Assessments Average Rating",
@@ -407,6 +515,8 @@ def generate_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int,
     ]
     tracker = tracker.reindex(columns=col_order)
     return tracker
+
+
 
 # ========================= CATEGORY CLASSIFIER ========================= #
 QUALITY_CATEGORIES = [
@@ -437,7 +547,7 @@ def _fallback_classify(text: str) -> str:
 
 @st.cache_data
 def categorize_quality_parameter(areas_text: str) -> str:
-    if not areas_text or str(areas_text).strip() == "":
+    if not areas_text or str(areas_text).strip() == "" or str(areas_text).strip() == "No improvements required and good ticket processing":
         return ""
     system = "You are a strict classifier for ticket QA."
     prompt = f"""
@@ -485,13 +595,25 @@ def compute_categories(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if "Quality Parameter Category" not in df.columns:
         df["Quality Parameter Category"] = ""
-    for idx, row in df.iterrows():
-        cur_val = str(row.get("Quality Parameter Category", "")).strip()
-        if cur_val == "" or cur_val.lower() in ["nan", "none"]:
-            # only compute for blanks -- this triggers Groq only when necessary
-            cat = categorize_quality_parameter(row.get("Areas to Improve", ""))
-            df.at[idx, "Quality Parameter Category"] = cat
+
+    total = len(df)
+    progress_bar = st.progress(0, text="Starting category classification...")
+    counter = 0
+
+    with st.spinner("🔍 Classifying Quality Parameter Categories..."):
+        for idx, row in df.iterrows():
+            cur_val = str(row.get("Quality Parameter Category", "")).strip()
+            if cur_val == "" or cur_val.lower() in ["nan", "none"]:
+                # only compute for blanks -- this triggers Groq only when necessary
+                cat = categorize_quality_parameter(row.get("Areas to Improve", ""))
+                df.at[idx, "Quality Parameter Category"] = cat
+
+            # 🔹 Update progress
+            counter += 1
+            progress_bar.progress(counter / total, text=f"Processing {counter}/{total} rows")
+
     return df
+
 
 def _build_month_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int, seed_examples: List[str]) -> pd.DataFrame:
     frames = []
