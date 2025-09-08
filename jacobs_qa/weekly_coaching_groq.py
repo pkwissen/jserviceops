@@ -8,21 +8,11 @@ import datetime as dt
 from collections import Counter, defaultdict
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
-import subprocess
+
 import pandas as pd
 import numpy as np
 import streamlit as st
-import time
-def run_setup():
-    setup_path = os.path.join(os.path.dirname(__file__), "setup.sh")
-    try:
-        subprocess.Popen(["bash", setup_path])
-        print("✅ setup.sh started in background")
-    except Exception as e:
-        print(f"⚠️ Failed to run setup.sh: {e}")
 
-# call before launching Streamlit app code
-run_setup()
 # ========================= UI CONSTANTS ========================= #
 APP_TITLE = "Weekly Coaching Assessment Tracker"
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
@@ -175,51 +165,184 @@ def clean_output(text: str) -> str:
         text = text.replace(p, "")
     return text.strip()
 
-load_dotenv(dotenv_path="/teamspace/studios/this_studio/jserviceops/.env")
+load_dotenv()
 
-# ========================= OLLAMA LLM (LOCAL, NO API KEYS) ========================= #
-import os
-import re
-import streamlit as st
-from collections import defaultdict
-from typing import Dict, List
-import ollama  # pip install ollama
-
+# ========================= GROQ LLM (NO BATCH) ========================= #
 SYSTEM_SUMMARY = (
     "You are a QA coaching assistant. Summarize ONLY improvement-relevant text "
     "in 2–3 concise sentences (no bullets). Do not mention strengths, generic advice, "
     "or checklists. Be direct and specific."
 )
 
-# ------------------------------------------------------------------ #
-# Since Ollama is local, no need for API key management
-# ------------------------------------------------------------------ #
-def is_rate_limit_error(_):
-    return False  # no rate limits in local ollama
+try:
+    from groq import Groq
+except Exception:
+    Groq = None
+
+
+# Get all available API keys from environment variables
+def get_api_keys_from_env():
+    """Extract all GROQ API keys from environment variables"""
+    api_keys = []
+    # Check for common key patterns
+    key_patterns = [
+        "GROQ_API_KEY_1", "GROQ_API_KEY_2", "GROQ_API_KEY_3", "GROQ_API_KEY_4",
+        "GROQ_API_KEY_5"
+    ]
+
+    # Also check for numbered keys up to 20
+    for i in range(1, 21):
+        key_patterns.append(f"GROQ_API_KEY_{i}")
+
+    # Get all environment variables
+    env_vars = os.environ
+
+    # Extract keys that match our patterns
+    for pattern in key_patterns:
+        if pattern in env_vars and env_vars[pattern].strip():
+            api_keys.append(env_vars[pattern].strip())
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_keys = []
+    for key in api_keys:
+        if key not in seen:
+            seen.add(key)
+            unique_keys.append(key)
+
+    return unique_keys
+
+
+# Get API keys from environment
+GROQ_API_KEYS = get_api_keys_from_env()
+
+# Track current key index and usage
+if "groq_key_index" not in st.session_state:
+    st.session_state.groq_key_index = 0
+if "groq_key_limits" not in st.session_state:
+    st.session_state.groq_key_limits = defaultdict(bool)  # True if key hit limit
+
+# Rate limit error patterns
+RATE_LIMIT_PATTERNS = [
+    "rate limit",
+    "quota",
+    "limit exceeded",
+    "too many requests",
+    "429",
+    "insufficient_quota"
+]
+
+
+def is_rate_limit_error(error_msg):
+    """Check if error message indicates a rate limit"""
+    if not error_msg:
+        return False
+    error_lower = error_msg.lower()
+    return any(pattern in error_lower for pattern in RATE_LIMIT_PATTERNS)
+
 
 def get_next_groq_client():
-    """Dummy placeholder to match old structure"""
-    return True  # always available (Ollama runs locally)
+    """Get the next available Groq client with fallback keys"""
+    if not GROQ_API_KEYS:
+        st.error("No API keys available. Please check your .env file.")
+        return None
 
-# ------------------------------------------------------------------ #
-# Core Ollama completion
-# ------------------------------------------------------------------ #
+    # Try current key first if it hasn't hit limit
+    current_index = st.session_state.groq_key_index
+    current_key = GROQ_API_KEYS[current_index]
+
+    if current_key and not st.session_state.groq_key_limits[current_index]:
+        try:
+            client = Groq(api_key=current_key)
+            # Quick test to see if key is valid
+            client.models.list(timeout=5)
+            return client
+        except Exception as e:
+            if is_rate_limit_error(str(e)):
+                st.session_state.groq_key_limits[current_index] = True
+                st.warning(f"API key {current_index + 1} hit rate limit. Switching to next key.")
+            else:
+                print(f"API key {current_index + 1} test failed: {e}")
+
+    # If current key hit limit or failed, try other keys
+    for i in range(1, len(GROQ_API_KEYS)):
+        next_index = (current_index + i) % len(GROQ_API_KEYS)
+        next_key = GROQ_API_KEYS[next_index]
+
+        if next_key and not st.session_state.groq_key_limits[next_index]:
+            try:
+                client = Groq(api_key=next_key)
+                client.models.list(timeout=5)  # Quick test
+                st.session_state.groq_key_index = next_index
+                st.info(f"Switched to API key {next_index + 1}")
+                return client
+            except Exception as e:
+                if is_rate_limit_error(str(e)):
+                    st.session_state.groq_key_limits[next_index] = True
+                    print(f"API key {next_index + 1} hit rate limit during test")
+                else:
+                    print(f"API key {next_index + 1} test failed: {e}")
+                continue
+
+    # If all keys hit limits, try to reset and start from beginning
+    if all(st.session_state.groq_key_limits.get(i, False) for i in range(len(GROQ_API_KEYS))):
+        st.warning("All API keys hit limits. Resetting and trying keys again.")
+        for i in range(len(GROQ_API_KEYS)):
+            st.session_state.groq_key_limits[i] = False  # Reset all limits
+        st.session_state.groq_key_index = 0
+        return get_next_groq_client()  # Recursive call to try again
+
+    st.error("All available API keys have hit rate limits or are invalid.")
+    return None
+
+
 def _groq_complete(messages: List[Dict[str, str]], max_tokens: int = 220) -> str:
-    try:
-        response = ollama.chat(
-            model="mistral:latest",
-            messages=messages,
-            options={"temperature": 0.2, "num_predict": max_tokens}
-        )
-        out = (response.get("message", {}).get("content", "") or "").strip()
-        return clean_output(out)
-    except Exception as e:
-        print(f"(Ollama) completion error: {e}")
+    if not GROQ_API_KEYS:
         return ""
 
-# ------------------------------------------------------------------ #
-# Fallback summarizer (rule-based)
-# ------------------------------------------------------------------ #
+    client = get_next_groq_client()
+    if not client:
+        return ""
+
+    try:
+        resp = client.chat.completions.create(
+            model=DEFAULT_GROQ_MODEL,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=max_tokens,
+            timeout=30  # Add timeout to prevent hanging
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        return clean_output(out)
+    except Exception as e:
+        current_index = st.session_state.groq_key_index
+        error_msg = str(e)
+
+        if is_rate_limit_error(error_msg):
+            st.session_state.groq_key_limits[current_index] = True
+            print(f"(Groq) rate limit with key {current_index + 1}: {error_msg}")
+
+            # Try with next key immediately
+            new_client = get_next_groq_client()
+            if new_client:
+                try:
+                    resp = new_client.chat.completions.create(
+                        model=DEFAULT_GROQ_MODEL,
+                        messages=messages,
+                        temperature=0.2,
+                        max_tokens=max_tokens,
+                        timeout=30
+                    )
+                    out = (resp.choices[0].message.content or "").strip()
+                    return clean_output(out)
+                except Exception as retry_e:
+                    print(f"(Groq) retry also failed: {retry_e}")
+        else:
+            print(f"(Groq) completion error with key {current_index + 1}: {error_msg}")
+
+        return ""
+
+
 def _fallback_summarize(text: str) -> str:
     if not text:
         return ""
@@ -235,112 +358,86 @@ def _fallback_summarize(text: str) -> str:
         summary = summary[:600].rsplit(" ", 1)[0] + "..."
     return summary
 
-# ------------------------------------------------------------------ #
-# Output cleaner
-# ------------------------------------------------------------------ #
+
 def clean_groq_output(text: str) -> str:
     return clean_output(text)
-# ------------------------------------------------------------------ #
-# Main function for summarization
-# ------------------------------------------------------------------ #
-def ensure_ollama_active(
-    host: str = "http://localhost:11434",
-    setup_script: str = "setup.sh",
-    retries: int = 10,
-    wait_sec: int = 2
-) -> None:
-    """
-    Ensure Ollama is active. If not, attempt to start it via setup.sh.
-    Does not raise errors if it cannot start (safely returns).
-    """
-    def is_active():
-        try:
-            r = requests.get(f"{host}/api/tags", timeout=2)
-            return r.status_code == 200
-        except Exception:
-            return False
 
-    if is_active():
-        return
-
-    # Start Ollama
-    subprocess.Popen(["bash", setup_script])
-
-    # Wait for Ollama to become active
-    for _ in range(retries):
-        time.sleep(wait_sec)
-        if is_active():
-            return
 
 def groq_chat_completion(prompt: str, system: str = None) -> str:
-    sys_msg = system or (
-        "You are a QA coaching assistant. "
-        "Extract only improvement issues from the observations. "
-        "Output must be a list of crisp one-line statements, separated by newlines. "
-        "If no issues are found, return exactly: 'No improvements required and good ticket processing'. "
-        "Do not add any explanations, positives, or greetings.\n\n"
-        "Examples of correct output format:\n"
-        "- Computer name missing\n"
-        "- Incorrect CI\n"
-        "- Bomgar chat missing\n"
-        "- Agent did not update the CI and resolution notes in the ticket\n"
-        "- Missed mentioning the KB numbers in the worknotes\n"
-        "OR\n"
-        "No improvements required and good ticket processing"
-    )
+    client = get_next_groq_client()
+    if not client:
+        return ""
 
-    # Ensure Ollama is running; if not, start it
-    ensure_ollama_active()
-
-    # Attempt the chat call
     try:
-        response = ollama.chat(
-            model="mistral:latest",
+        sys_msg = system or (
+            "You are a QA coaching assistant.\n"
+            "From the raw comments, output only improvement issues.\n"
+            "- Each issue: a unique, very short phrase or one short sentence.\n"
+            "- Merge duplicates; avoid filler and repetition.\n"
+            "- No strengths, no generic advice, no checklists.\n"
+            '- If no improvements, respond exactly: "Analyst performed well. No improvement as of now."'
+        )
+
+        response = client.chat.completions.create(
+            model=DEFAULT_GROQ_MODEL,
             messages=[
                 {"role": "system", "content": sys_msg},
                 {"role": "user", "content": prompt},
             ],
-            options={"temperature": 0.2}
+            timeout=30  # Add timeout to prevent hanging
         )
-        if response and response.get("message"):
-            return (response["message"].get("content", "") or "").strip()
-        return "No improvements required and good ticket processing"
-    except Exception:
-        return "No improvements required and good ticket processing"
 
-def synthesize_areas_to_improve(
-    all_comments: List[str],
-    service_now_avg: Optional[float] = None,
-    manual_avg: Optional[float] = None,
-) -> str:
-    """
-    Decide whether to skip Ollama call based on averages.
-    If both averages are 10, OR if either one exists and is 10,
-    return 'No improvements required and good ticket processing'.
-    Otherwise, call Ollama to generate improvement areas.
-    """
-    # ---- Fast-path check for perfect scores ----
-    if service_now_avg == 10 and manual_avg == 10:
-        return "No improvements required and good ticket processing"
-    if service_now_avg == 10 and manual_avg is None:
-        return "No improvements required and good ticket processing"
-    if manual_avg == 10 and service_now_avg is None:
-        return "No improvements required and good ticket processing"
+        if response and response.choices:
+            raw = response.choices[0].message.content or ""
+            try:
+                return clean_groq_output(raw).strip()
+            except NameError:
+                return (raw or "").strip()
+        return ""
+    except Exception as e:
+        current_index = st.session_state.groq_key_index
+        error_msg = str(e)
 
-    # ---- Fall back to comments analysis ----
-    cleaned_bits = list({c.strip() for c in (all_comments or []) if _norm(c)})
+        if is_rate_limit_error(error_msg):
+            st.session_state.groq_key_limits[current_index] = True
+            print(f"Groq API rate limit with key {current_index + 1}: {error_msg}")
+
+            # Try with next key immediately
+            new_client = get_next_groq_client()
+            if new_client:
+                try:
+                    response = new_client.chat.completions.create(
+                        model=DEFAULT_GROQ_MODEL,
+                        messages=[
+                            {"role": "system", "content": sys_msg},
+                            {"role": "user", "content": prompt},
+                        ],
+                        timeout=30
+                    )
+                    if response and response.choices:
+                        raw = response.choices[0].message.content or ""
+                        return clean_groq_output(raw).strip()
+                except Exception as retry_e:
+                    print(f"(Groq) retry also failed: {retry_e}")
+        else:
+            print(f"Groq API call failed with key {current_index + 1}: {error_msg}")
+
+        return ""
+
+def synthesize_areas_to_improve(all_comments: List[str], employee_name: str, seed_examples: List[str]) -> str:
+    try:
+        cleaned_bits = [c.strip() for c in (all_comments or []) if _norm(c)]
+    except NameError:
+        cleaned_bits = [c.strip() for c in (all_comments or []) if isinstance(c, str) and c.strip()]
     if not cleaned_bits:
-        return "No improvements required and good ticket processing"
-
+        return ""
     combined = " ".join(cleaned_bits)
     user_prompt = (
-        f"QA observations: {combined}\n\n"
-        "Extract only the improvement issues. "
-        "Write each as a crisp one-line statement, separated by newlines. "
-        "Follow the format shown in the examples."
+        f"Raw observations (cleaned): {combined}\n"
+        + "Write only 2–3 sentences focusing on specific improvement actions and missed steps. "
+          "Avoid strengths, disclaimers, or generic best practices. Do not include personally identifiable customer data."
     )
     return groq_chat_completion(user_prompt)
-
 
 # ========================= EXTRACTION LAYER ========================= #
 COLUMN_CANDIDATES = {
@@ -394,35 +491,19 @@ def get_week_filter_mask(df: pd.DataFrame, week_col: Optional[str], date_col: Op
     return mask.fillna(False)
 
 # ========================= CORE PIPELINE ========================= #
-def generate_tracker(
-    manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int, week_n: int,
-    seed_examples: List[str]
-) -> pd.DataFrame:
+def generate_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int, week_n: int,
+                     seed_examples: List[str]) -> pd.DataFrame:
     m_cols = extract_people_fields(manual_df)
     s_cols = extract_people_fields(sn_df)
-
     m_mask = get_week_filter_mask(manual_df, m_cols["week_col"], m_cols["date_col"], month_n, week_n)
     s_mask = get_week_filter_mask(sn_df, s_cols["week_col"], s_cols["date_col"], month_n, week_n)
-
     mdf = manual_df[m_mask].copy() if len(manual_df) else manual_df.copy()
     sdf = sn_df[s_mask].copy() if len(sn_df) else sn_df.copy()
-
-    manual_names = (
-        mdf[m_cols["name_col"]].dropna().astype(str).map(build_employee_key)
-        if m_cols["name_col"] else pd.Series([], dtype=str)
-    )
-    sn_names = (
-        sdf[s_cols["name_col"]].dropna().astype(str).map(build_employee_key)
-        if s_cols["name_col"] else pd.Series([], dtype=str)
-    )
-
+    manual_names = mdf[m_cols["name_col"]].dropna().astype(str).map(build_employee_key) if m_cols["name_col"] else pd.Series([], dtype=str)
+    sn_names = sdf[s_cols["name_col"]].dropna().astype(str).map(build_employee_key) if s_cols["name_col"] else pd.Series([], dtype=str)
     all_names = sorted(set(manual_names.dropna()).union(set(sn_names.dropna())))
-
     def per_employee(df: pd.DataFrame, cols: Dict[str, str]) -> Dict[str, Dict[str, list]]:
-        d = defaultdict(lambda: {
-            "team_leads": [], "assessors": [], "comments": [],
-            "sn_ratings": [], "manual_grades": []
-        })
+        d = defaultdict(lambda: {"team_leads": [], "assessors": [], "comments": [], "sn_ratings": [], "manual_grades": []})
         if df is None or df.empty or not cols.get("name_col"):
             return d
         for _, row in df.iterrows():
@@ -434,80 +515,47 @@ def generate_tracker(
             cm = row.get(cols["comments_col"]) if cols.get("comments_col") else None
             sr = row.get(cols["sn_rating_col"]) if cols.get("sn_rating_col") else None
             mg = row.get(cols["manual_grade_col"]) if cols.get("manual_grade_col") else None
-
             if tl: d[name]["team_leads"].append(str(tl))
             if qa: d[name]["assessors"].append(str(qa))
             if cm: d[name]["comments"].append(str(cm))
             if sr is not None: d[name]["sn_ratings"].append(sr)
             if mg is not None: d[name]["manual_grades"].append(mg)
         return d
-
     agg_manual = per_employee(mdf, m_cols)
     agg_sn = per_employee(sdf, s_cols)
-
     records = []
-
-    # 🔹 Progress bar + spinner
-    total = len(all_names)
-    progress_bar = st.progress(0, text="Starting employee processing...")
-    counter = 0
-
-    with st.spinner("⏳ Generating Areas to Improve for employees..."):
-        for name in all_names:
-            team_leads = agg_manual[name]["team_leads"] + agg_sn[name]["team_leads"]
-            assessors = agg_manual[name]["assessors"] + agg_sn[name]["assessors"]
-            comments = agg_manual[name]["comments"] + agg_sn[name]["comments"]
-
-            sn_ratings = pd.to_numeric(pd.Series(agg_sn[name]["sn_ratings"]), errors="coerce").dropna().tolist()
-            manual_grades_series = pd.Series(agg_manual[name]["manual_grades"])
-
-            team_lead_final = None
-            if team_leads:
-                c = Counter([_norm(tl) for tl in team_leads if _norm(tl)])
-                team_lead_final = c.most_common(1)[0][0] if c else None
-
-            assessors_final = ", ".join(sorted(set([_norm(a) for a in assessors if _norm(a)]))) or None
-
-            service_now_count = len(sn_ratings)
-            service_now_avg = round(float(np.mean(sn_ratings)), 2) if sn_ratings else None
-
-            manual_count = len(agg_manual[name]["manual_grades"]) if agg_manual[name]["manual_grades"] else 0
-            manual_avg = average_of_grades(manual_grades_series) if manual_count else None
-
-            # 🔹 Apply skip-logic before calling Ollama
-            if (service_now_avg == 10 and manual_avg == 10) or \
-               (service_now_avg == 10 and manual_avg is None) or \
-               (manual_avg == 10 and service_now_avg is None):
-                areas_text = "No improvements required and good ticket processing"
-            else:
-                areas_text = synthesize_areas_to_improve(
-                    comments,
-                    service_now_avg=service_now_avg,
-                    manual_avg=manual_avg
-                )
-
-            rec = {
-                "Employee Name": name,
-                "Emp ID": "",
-                "Organization": "",
-                "Team Lead": team_lead_final or "",
-                "Status": "",
-                "Quality Assessors": assessors_final or "",
-                "Week": f"{dt.date(1900, month_n, 1).strftime('%b')} - Week {week_n}",
-                "Service Now Assessments Count": service_now_count if service_now_count else "",
-                "Service Now Assessments Average Rating": service_now_avg if service_now_avg is not None else "",
-                "Manual Assessments Count": manual_count if manual_count else "",
-                "Manual Assessments Average Rating": manual_avg if manual_avg is not None else "",
-                "Areas to Improve": areas_text,
-            }
-            records.append(rec)
-
-            # 🔹 Update progress bar
-            counter += 1
-            progress_bar.progress(counter / total, text=f"Processing {counter}/{total} employees")
-
+    for name in all_names:
+        team_leads = agg_manual[name]["team_leads"] + agg_sn[name]["team_leads"]
+        assessors = agg_manual[name]["assessors"] + agg_sn[name]["assessors"]
+        comments = agg_manual[name]["comments"] + agg_sn[name]["comments"]
+        sn_ratings = pd.to_numeric(pd.Series(agg_sn[name]["sn_ratings"]), errors="coerce").dropna().tolist()
+        manual_grades_series = pd.Series(agg_manual[name]["manual_grades"])
+        team_lead_final = None
+        if team_leads:
+            c = Counter([_norm(tl) for tl in team_leads if _norm(tl)])
+            team_lead_final = c.most_common(1)[0][0] if c else None
+        assessors_final = ", ".join(sorted(set([_norm(a) for a in assessors if _norm(a)]))) or None
+        service_now_count = len(sn_ratings)
+        service_now_avg = round(float(np.mean(sn_ratings)), 2) if sn_ratings else None
+        manual_count = len(agg_manual[name]["manual_grades"]) if agg_manual[name]["manual_grades"] else 0
+        manual_avg = average_of_grades(manual_grades_series) if manual_count else None
+        areas_text = synthesize_areas_to_improve(comments, name, seed_examples)
+        rec = {
+            "Employee Name": name,
+            "Emp ID": "",
+            "Organization": "",
+            "Team Lead": team_lead_final or "",
+            "Status": "",
+            "Quality Assessors": assessors_final or "",
+            "Week": f"{dt.date(1900, month_n, 1).strftime('%b')} - Week {week_n}",
+            "Service Now Assessments Count": service_now_count if service_now_count else "",
+            "Service Now Assessments Average Rating": service_now_avg if service_now_avg is not None else "",
+            "Manual Assessments Count": manual_count if manual_count else "",
+            "Manual Assessments Average Rating": manual_avg if manual_avg is not None else "",
+            "Areas to Improve": areas_text,
+        }
+        records.append(rec)
     tracker = pd.DataFrame.from_records(records)
-
     col_order = [
         "Employee Name", "Emp ID", "Organization", "Team Lead", "Status", "Quality Assessors", "Week",
         "Service Now Assessments Count", "Service Now Assessments Average Rating",
@@ -515,8 +563,6 @@ def generate_tracker(
     ]
     tracker = tracker.reindex(columns=col_order)
     return tracker
-
-
 
 # ========================= CATEGORY CLASSIFIER ========================= #
 QUALITY_CATEGORIES = [
@@ -547,7 +593,7 @@ def _fallback_classify(text: str) -> str:
 
 @st.cache_data
 def categorize_quality_parameter(areas_text: str) -> str:
-    if not areas_text or str(areas_text).strip() == "" or str(areas_text).strip() == "No improvements required and good ticket processing":
+    if not areas_text or str(areas_text).strip() == "":
         return ""
     system = "You are a strict classifier for ticket QA."
     prompt = f"""
@@ -595,25 +641,13 @@ def compute_categories(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if "Quality Parameter Category" not in df.columns:
         df["Quality Parameter Category"] = ""
-
-    total = len(df)
-    progress_bar = st.progress(0, text="Starting category classification...")
-    counter = 0
-
-    with st.spinner("🔍 Classifying Quality Parameter Categories..."):
-        for idx, row in df.iterrows():
-            cur_val = str(row.get("Quality Parameter Category", "")).strip()
-            if cur_val == "" or cur_val.lower() in ["nan", "none"]:
-                # only compute for blanks -- this triggers Groq only when necessary
-                cat = categorize_quality_parameter(row.get("Areas to Improve", ""))
-                df.at[idx, "Quality Parameter Category"] = cat
-
-            # 🔹 Update progress
-            counter += 1
-            progress_bar.progress(counter / total, text=f"Processing {counter}/{total} rows")
-
+    for idx, row in df.iterrows():
+        cur_val = str(row.get("Quality Parameter Category", "")).strip()
+        if cur_val == "" or cur_val.lower() in ["nan", "none"]:
+            # only compute for blanks -- this triggers Groq only when necessary
+            cat = categorize_quality_parameter(row.get("Areas to Improve", ""))
+            df.at[idx, "Quality Parameter Category"] = cat
     return df
-
 
 def _build_month_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: int, seed_examples: List[str]) -> pd.DataFrame:
     frames = []
@@ -631,17 +665,12 @@ def _build_month_tracker(manual_df: pd.DataFrame, sn_df: pd.DataFrame, month_n: 
 
 # ========================= UI helpers ========================= #
 def ensure_session_defaults():
-    if "groq_key_index" not in st.session_state:
-        st.session_state.groq_key_index = 0
-    if "groq_key_limits" not in st.session_state:
-        st.session_state.groq_key_limits = defaultdict(bool)
     if "weekly_trackers" not in st.session_state:
-        st.session_state.weekly_trackers = []
+        st.session_state["weekly_trackers"] = []  # list of per-week tracker DataFrames
     if "view" not in st.session_state:
-        st.session_state.view = None
+        st.session_state["view"] = None
     if "tracker" not in st.session_state:
-        st.session_state.tracker = pd.DataFrame()
-
+        st.session_state["tracker"] = pd.DataFrame()
 
 def register_weekly_tracker(tracker_df: pd.DataFrame):
     if tracker_df is None or tracker_df.empty:
@@ -683,10 +712,10 @@ def show_quick_views():
         return
 
     # Ensure categories exist, but compute only if blanks (compute_categories is cached)
-    if "Quality Parameter Category" not in tracker.columns or tracker["Quality Parameter Category"].isnull().any() or (tracker["Quality Parameter Category"].astype(str).str.strip() == "").any():
-        # This will only call groq for rows missing category (per compute_categories implementation)
-        tracker = compute_categories(tracker)
-        st.session_state["tracker"] = tracker  # persist filled categories
+    # if "Quality Parameter Category" not in tracker.columns or tracker["Quality Parameter Category"].isnull().any() or (tracker["Quality Parameter Category"].astype(str).str.strip() == "").any():
+    #     # This will only call groq for rows missing category (per compute_categories implementation)
+    #     tracker = compute_categories(tracker)
+    #     st.session_state["tracker"] = tracker  # persist filled categories
 
     # Category filter view
     st.markdown("### 📂 View by Quality Parameter Category")
@@ -857,11 +886,11 @@ def main():
             tracker = pd.read_excel(saved_tracker_file, sheet_name="Coaching Tracker").drop(columns=["Unnamed: 0"], errors="ignore")
             # persist uploaded tracker (useful for month aggregation)
             # compute categories only if missing (compute_categories will call groq only for missing rows)
-            if "Quality Parameter Category" not in tracker.columns or tracker["Quality Parameter Category"].isnull().any() or (tracker["Quality Parameter Category"].astype(str).str.strip() == "").any():
-                tracker = compute_categories(tracker)
-            # compute __score__
-            if "__score__" not in tracker.columns:
-                tracker["__score__"] = tracker.apply(_row_perf_score, axis=1)
+            # if "Quality Parameter Category" not in tracker.columns or tracker["Quality Parameter Category"].isnull().any() or (tracker["Quality Parameter Category"].astype(str).str.strip() == "").any():
+            #     tracker = compute_categories(tracker)
+            # # compute __score__
+            # if "__score__" not in tracker.columns:
+            #     tracker["__score__"] = tracker.apply(_row_perf_score, axis=1)
             st.session_state["tracker"] = tracker
             st.session_state["uploaded_tracker_df"] = tracker.copy()
             st.success(f"Loaded saved tracker. Rows: {len(tracker)}")
