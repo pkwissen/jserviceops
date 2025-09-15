@@ -174,19 +174,34 @@ def main():
         progress = st.progress(0, text="🚀 Starting forecasting...")
 
         forecast_dfs = []
-
         # Set channels dynamically based on selected heatmap option
         if heatmap_option == "Service Now":
             channels = ["Chat", "Phone", "Self-service"]
         elif heatmap_option == "Service Now - Five9 together":
             channels = ["Chat", "Phone59", "Self-service"]
 
+        all_dates = pd.date_range(start=start_dt, end=end_dt).date
 
         for i, channel in enumerate(channels):
-            progress.progress(int((i + 1) / len(channels) * 80), text=f"⏳ Forecasting {channel}...")
-            df = forecaster.run_forecasting(xls.parse(channel), start_dt, end_dt)
-            df["Channel"] = channel
-            forecast_dfs.append(df)
+            channel_df = xls.parse(channel)
+            channel_df["Date"] = pd.to_datetime(channel_df["Date"]).dt.date
+
+            # Check if all required dates are present in the data
+            available_dates = set(channel_df["Date"].unique())
+            missing_dates = [d for d in all_dates if d not in available_dates]
+
+            if not missing_dates:
+                # All dates present, use existing data for this period
+                st.success(f"✅ Using existing data for {channel} ({start_date} to {end_date})")
+                period_df = channel_df[channel_df["Date"].isin(all_dates)].copy()
+                period_df["Channel"] = channel
+                forecast_dfs.append(period_df)
+            else:
+                # Some dates missing, run forecasting for this channel
+                progress.progress(int((i + 1) / len(channels) * 80), text=f"⏳ Forecasting {channel}...")
+                df = forecaster.run_forecasting(channel_df, start_dt, end_dt)
+                df["Channel"] = channel
+                forecast_dfs.append(df)
 
         full_forecast = pd.concat(forecast_dfs, ignore_index=True)
         st.session_state['forecast'] = full_forecast

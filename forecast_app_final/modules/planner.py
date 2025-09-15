@@ -12,22 +12,35 @@ def generate_shift_plan(forecast_df, tasks_per_resource=None):
     result_frames = {}
     for channel, task_count in tasks_per_resource.items():
         df = forecast_df[forecast_df["Channel"] == channel].copy()
+        if "Date" not in df.columns:
+            continue
+        df["Date"] = pd.to_datetime(df["Date"])
+
+        # Identify working days (Mon-Fri)
+        working_day_mask = df["Date"].dt.weekday < 5
+        working_days = df.loc[working_day_mask, "Date"].dt.date.unique()
+        num_working_days = len(working_days)
+        if num_working_days == 0:
+            continue
+
+        avg_col_name = f"Avg_for_{num_working_days}_working_days"
 
         planning = []
         for hour in range(1, 25):
             try:
-                hourly_values = df[str(hour)].values
+                # Only use rows for working days
+                hourly_values = df.loc[working_day_mask, str(hour)].values
             except KeyError:
                 continue
 
-            sum_7_days = np.sum(hourly_values)
-            avg_per_working_day = sum_7_days / 7
+            sum_working_days = np.sum(hourly_values)
+            avg_per_working_day = sum_working_days / num_working_days
             min_resources = int(np.ceil(avg_per_working_day / task_count))
 
             planning.append({
                 "Hour": (hour + 5) % 24,
-                channel.capitalize(): round(sum_7_days),
-                "Avg_for_7_days": round(avg_per_working_day)
+                channel.capitalize(): round(sum_working_days),
+                avg_col_name: round(avg_per_working_day)
             })
 
         result_df = pd.DataFrame(planning)
@@ -58,19 +71,19 @@ def apply_coloring_and_download(all_plans, start_date, end_date, backup_path=Non
         df = all_plans[channel]
         st.subheader(f"{channel} Plan")
 
-        # Prepare dataframe for display
         df_display = df.copy()
         df_display.index = range(1, len(df_display) + 1)
         df_display.index.name = 'Sr.No.'  # Rename index
 
-        if "Avg_for_7_days" in df_display.columns:
+        avg_col_name = get_avg_col_name(df_display)
+
+        if avg_col_name:
             styled = df_display.style.background_gradient(
-                cmap="RdYlGn_r", subset=["Avg_for_7_days"]
+                cmap="RdYlGn_r", subset=[avg_col_name]
             )
         else:
             styled = df_display.style
 
-        # Display in Streamlit
         st.dataframe(styled, use_container_width=True)
 
         # Save individual plan Excel with formatting
@@ -85,8 +98,8 @@ def apply_coloring_and_download(all_plans, start_date, end_date, backup_path=Non
                 'bold': True, 'align': 'center', 'valign': 'vcenter', 'font_size': 14
             }))
 
-            if "Avg_for_7_days" in df.columns:
-                avg_col_index = df.columns.get_loc("Avg_for_7_days")
+            if avg_col_name:
+                avg_col_index = df.columns.get_loc(avg_col_name)
                 avg_col_letter = chr(ord('A') + avg_col_index)
                 worksheet.conditional_format(f'{avg_col_letter}3:{avg_col_letter}{len(df) + 2}', {
                     'type': '3_color_scale',
@@ -115,8 +128,9 @@ def apply_coloring_and_download(all_plans, start_date, end_date, backup_path=Non
                 'bold': True, 'align': 'center', 'valign': 'vcenter', 'font_size': 14
             }))
 
-            if "Avg_for_7_days" in df.columns:
-                avg_col_index = df.columns.get_loc("Avg_for_7_days")
+            avg_col_name = get_avg_col_name(df)
+            if avg_col_name:
+                avg_col_index = df.columns.get_loc(avg_col_name)
                 avg_col_letter = chr(ord('A') + avg_col_index)
                 worksheet.conditional_format(f'{avg_col_letter}3:{avg_col_letter}{len(df) + 2}', {
                     'type': '3_color_scale',
@@ -185,4 +199,13 @@ def daily_analyst_requirements(full_forecast: pd.DataFrame, analysts_capacity_pe
         daily = pd.concat([daily, total], ignore_index=True)
 
     return daily.sort_values(["Date", "Channel"]).reset_index(drop=True)
+
+def get_avg_col_name(df):
+    """
+    Returns the first column name that matches the pattern 'Avg_for_*_working_days'
+    """
+    for col in df.columns:
+        if col.startswith("Avg_for_") and col.endswith("_working_days"):
+            return col
+    return None
 
