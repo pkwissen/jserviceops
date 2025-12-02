@@ -134,6 +134,6 @@ def run_form():
             df_row = pd.DataFrame([row])
             try:
                 append_submission_row(df_row, OUTPUT_PATH, OUTPUT_SHEET)
-                st.success(f"Saved submission to '{OUTPUT_PATH}' (sheet: {OUTPUT_SHEET}).")
+                # st.success(f"Saved submission to '{OUTPUT_PATH}' (sheet: {OUTPUT_SHEET}).")
             except Exception as e:
                 st.error(f"Failed to save submission: {e}")
