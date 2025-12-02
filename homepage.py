@@ -23,12 +23,19 @@ def main():
             st.session_state["current_app"] = "Ticket_Feedback_Dashboard"
             st.rerun()
 
-    # Second row → Weekly app directly below the first column
-    col3, _ = st.columns([1, 1])
+    # Second row → Weekly app and Email Automation side by side
+    col3, col4 = st.columns(2)
 
     with col3:
         st.subheader("📅 Weekly Coaching Assessment Tracker")
         st.markdown("Create Weekly Coaching Assessment report based on Manual and ServiceNow assessment.")
         if st.button("Go to Weekly Coaching Assessment Tracker", key="btn_weekly"):
             st.session_state["current_app"] = "Jacobs_QA"
+            st.rerun()
+
+    with col4:
+        st.subheader("📧 Email Automation")
+        st.markdown("Automate email sending and management tasks.")
+        if st.button("Go to Email Automation", key="btn_email_automation"):
+            st.session_state["current_app"] = "Email_Automation"
             st.rerun()

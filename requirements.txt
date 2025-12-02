@@ -79,3 +79,5 @@ urllib3
 watchdog
 zope.event
 zope.interface
+pywin32
+msal

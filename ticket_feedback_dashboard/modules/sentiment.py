@@ -1,7 +1,7 @@
 import streamlit as st
 from transformers import pipeline
 
-labels = ["Strong Negative", "Mild Negative", "Actionable", "Unclear"]
+labels = ["Strong Negative", "Mild Negative", "Actionable"]
 
 @st.cache_resource(show_spinner=False)
 def load_classifier():

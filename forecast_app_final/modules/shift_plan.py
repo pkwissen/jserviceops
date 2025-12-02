@@ -8,10 +8,10 @@ TASK_DURATION = {
     "Self-service": 30
 }
 TASKS_PER_DAY = {
-    "Chat": 13,
-    "Phone": 13,
-    "Phone59": 13,
-    "Self-service": 15
+    "Chat": 14,
+    "Phone": 14,
+    "Phone59": 14,
+    "Self-service": 14
 }
 MINUTES_PER_ANALYST = 540  # 9 hours
 
@@ -37,15 +37,24 @@ SHIFT_TIME_LABELS = {
     "shift7": "8 pm - 5 am",
     "shift8": "10 pm - 7 am",
 }
+def get_avg_col_name(df):
+    """
+    Returns the first column name that matches the pattern 'Avg_for_*_working_days'
+    """
+    for col in df.columns:
+        if col.startswith("Avg_for_") and col.endswith("_working_days"):
+            return col
+    return None
 
 def clean_forecast_df(df, channel_name):
     df = df.iloc[1:]
-    df.columns = ['Hour', channel_name, 'Avg_for_7_days']
+    avg_col_name = get_avg_col_name(df)
+    df.columns = ['Hour', channel_name, avg_col_name]
     df['Hour'] = pd.to_numeric(df['Hour'], errors='coerce')
     df = df.dropna(subset=['Hour'])
     df['Hour'] = df['Hour'].astype(int)
-    df['Avg_for_7_days'] = pd.to_numeric(df['Avg_for_7_days'], errors='coerce').fillna(0).astype(int)
-    return df[['Hour', 'Avg_for_7_days']].rename(columns={'Avg_for_7_days': channel_name})
+    df[avg_col_name] = pd.to_numeric(df[avg_col_name], errors='coerce').fillna(0).astype(int)
+    return df[['Hour', avg_col_name]].rename(columns={avg_col_name: channel_name})
 
 def load_forecast_data(file_path):
     xls = pd.ExcelFile(file_path)
@@ -103,21 +112,29 @@ def generate_hourly_distribution(shift_plan_df):
         active_shifts = []
 
         for i, row in shift_df.iterrows():
-            s, e = row["start"], row["end"]
-            if s <= e:
-                if s <= norm_hour < e:
+            s = row["start"]
+            # enforce 9-hour shift duration from start
+            effective_end = (s + 9) % 24
+
+            # determine if norm_hour falls into the 9-hour window [s, effective_end)
+            if s <= effective_end:
+                # normal (non-overnight) 9-hour window
+                if s <= norm_hour < effective_end:
                     active_shifts.append(row["shift"])
-            else:  # overnight shift
-                if norm_hour >= s or norm_hour < e:
+            else:
+                # overnight 9-hour window (wraps midnight)
+                if norm_hour >= s or norm_hour < effective_end:
                     active_shifts.append(row["shift"])
 
+        # total_required remains the same logic (max of total_resource among active shifts)
         total_required = shift_df[shift_df["shift"].isin(active_shifts)]["total_resource"].max()
 
         original_shares = {}
         for shift in active_shifts:
             shift_row = shift_df[shift_df["shift"] == shift].iloc[0]
-            duration = (shift_row["end"] - shift_row["start"]) % 24
-            if duration == 0: duration = 24
+            # fixed duration = 9 hours for all shifts
+            duration = 9
+            # compute per-hour share based on 9-hour duration
             original_shares[shift] = shift_row["total_resource"] / duration
 
         total_original_hourly = sum(original_shares.values())
@@ -141,6 +158,7 @@ def generate_hourly_distribution(shift_plan_df):
     df_result = df_result[["Hour", "Teams"] + list(shift_df["shift"]) + ["total resources"]]
     df_result = df_result.rename(columns=SHIFT_TIME_LABELS)
     return df_result
+
 
 def main_pipeline(
     file_path,
