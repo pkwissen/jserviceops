@@ -4,6 +4,7 @@ import pandas as pd
 from modules.helpers import find_matching_sheets, load_questions_filtered_by_status, append_submission_row
 from modules.config import EXCEL_PATH, OUTPUT_PATH, OUTPUT_SHEET
 import os
+from modules.score import load_score_mapping, calculate_scores
 
 def _load_names_from_sheet(sheet_name: str):
     """Load distinct names from given sheet (expects column 'Name')."""
@@ -82,6 +83,9 @@ def run_form():
 
     answers = {}
     if sheet_for_contact:
+        # Load score mapping for this sheet + status
+        score_map = load_score_mapping(EXCEL_PATH, sheet_for_contact, ticket_status)
+
         try:
             q_pairs = load_questions_filtered_by_status(EXCEL_PATH, sheet_for_contact, ticket_status)
         except Exception as e:
@@ -94,11 +98,25 @@ def run_form():
         else:
             for i, (sr, q_text, opts) in enumerate(q_pairs, start=1):
                 st.markdown(f"**{q_number}. {q_text}**")
+
                 radio_options = ["Blank"] + opts
                 ans = st.radio("", radio_options, index=0, key=f"q_{sheet_for_contact}_{i}_{sr}")
                 answers[q_text] = ans
+
+                # ---- SCORE DISPLAY UI ----
+                if q_text in score_map:
+                    max_score = score_map[q_text]["max_score"]
+
+                    if ans == "Blank":
+                        score = 0
+                    else:
+                        score = score_map[q_text]["scores"].get(ans, 0)
+
+                    st.markdown(f"**Score: {score} / {max_score}**")
+
                 st.markdown("---")
                 q_number += 1
+
     else:
         st.info("Contact Type is Blank — no checklist sheet selected.")
 
@@ -116,6 +134,8 @@ def run_form():
         if missing:
             st.error(f"Please fill mandatory fields: {', '.join(missing)}")
         else:
+
+            # -------------- 1️⃣ Prepare submission row for Submissions sheet --------------
             row = {
                 "Date": datetime.now().date().isoformat(),
                 "Ticket Number": ticket_no,
@@ -126,14 +146,54 @@ def run_form():
                 "Contact Type": "" if contact_type == "Blank" else contact_type,
                 "Was the ticket escalated, resolved or cancelled?": ticket_status,
             }
+
             for colname, ans in answers.items():
                 row[colname] = "" if ans == "Blank" else ans
+
             row["Comments"] = comments
             row["Timestamp"] = datetime.now().isoformat(timespec='seconds')
 
             df_row = pd.DataFrame([row])
+
             try:
                 append_submission_row(df_row, OUTPUT_PATH, OUTPUT_SHEET)
-                # st.success(f"Saved submission to '{OUTPUT_PATH}' (sheet: {OUTPUT_SHEET}).")
             except Exception as e:
                 st.error(f"Failed to save submission: {e}")
+                return
+
+            # -------------- 2️⃣ Calculate scores for Score sheet --------------
+            per_question_scores = {}
+            total_score = 0
+            max_total_score = 0
+
+            for q_text, ans in answers.items():
+                if ans == "Blank":
+                    score = 0
+                else:
+                    score = score_map.get(q_text, {}).get("scores", {}).get(ans, 0)
+
+                max_score = score_map.get(q_text, {}).get("max_score", 0)
+
+                per_question_scores[q_text] = score
+                total_score += score
+                max_total_score += max_score
+
+            # -------------- 3️⃣ Append scores to Score sheet --------------
+            from modules.score_append import append_scores_row
+
+            score_row = {
+                "Ticket Number": ticket_no,
+                "Quality Coach": quality_coach,
+                "Team Leader": team_leader,
+                "Analyst Name": analyst_name,
+                "Contact Type": contact_type,
+                "Scores": per_question_scores,
+                "TotalScore": total_score,
+                "MaxTotalScore": max_total_score,
+                "Timestamp": datetime.now().isoformat(timespec="seconds")
+            }
+
+            append_scores_row(score_row, OUTPUT_PATH, "Score")  # <<<<<< CORRECT SHEET NAME
+
+            st.success("Form submitted successfully and scores stored.")
+
