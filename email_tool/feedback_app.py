@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import streamlit as st
 from datetime import datetime
-
+import re
 st.set_page_config(page_title="Feedback Form", layout="centered")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -93,8 +93,13 @@ row_ix = df.index[mask_ticket][0]
 # -----------------------------
 token_used = str(df.at[row_ix, "Token_Used"] or "").strip().lower()
 existing_response = str(df.at[row_ix, "Response"] or "").strip()
+def clean(text):
+    # \s+ matches any whitespace (space, tab, newline, NBSP)
+    # \u200b matches zero-width space
+    text_str = str(text).lower()
+    return re.sub(r'[\s\u200b]+', '', text_str)
 
-already_used = (token_used == "yes") or (existing_response != "")
+already_used = (clean(token_used) == "yes") or (clean(existing_response) not in ("", "nan", "none"))
 
 if already_used:
     st.warning("⚠️ You have already submitted feedback for this ticket.")

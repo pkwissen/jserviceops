@@ -3,9 +3,97 @@ import pandas as pd
 import os
 import urllib.parse
 import uuid
+from io import BytesIO
+
+# ===== PRODUCTION-GRADE VALIDATION =====
+
+MAX_FILE_SIZE_MB = 10  # Limit file uploads to 10MB
+REQUIRED_COLUMNS = {"Date", "Ticket Number", "Quality Coach", "Team Leader", "Analyst Name"}
+
+class ValidationError(Exception):
+    """Custom exception for validation errors"""
+    pass
+
+def validate_uploaded_file(uploaded_file) -> pd.DataFrame:
+    """
+    Production-grade validation for uploaded Excel files.
+    Checks file size, format, structure, and content.
+    
+    Returns: Validated DataFrame
+    Raises: ValidationError with descriptive message
+    """
+    # 1. Check file size
+    if uploaded_file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+        raise ValidationError(f"File too large. Max size: {MAX_FILE_SIZE_MB}MB. Uploaded: {round(uploaded_file.size / 1024 / 1024, 1)}MB")
+    
+    # 2. Try to read the file
+    try:
+        df = pd.read_excel(uploaded_file, dtype=str, engine="openpyxl")
+    except Exception as e:
+        # Check if it's really an Excel file
+        raise ValidationError(f"Invalid Excel file or corrupted format: {str(e)[:100]}")
+    
+    # 3. Check if dataframe is empty
+    if df.empty:
+        raise ValidationError("Excel file is empty. Please upload a file with data.")
+    
+    # 4. Check required columns
+    df_cols_normalized = {col.strip().lower() for col in df.columns}
+    required_normalized = {col.strip().lower() for col in REQUIRED_COLUMNS}
+    
+    missing_cols = required_normalized - df_cols_normalized
+    if missing_cols:
+        raise ValidationError(f"Missing required columns: {', '.join(missing_cols)}. Found columns: {', '.join(df.columns)}")
+    
+    # 5. Check for minimum rows
+    if len(df) == 0:
+        raise ValidationError("No data rows found in Excel file.")
+    
+    # 6. Check for critical missing values in key columns
+    critical_cols = ["Ticket Number", "Analyst Name"]
+    for col in critical_cols:
+        # Find the actual column name (case-insensitive)
+        actual_col = next((c for c in df.columns if c.strip().lower() == col.lower()), col)
+        null_count = df[actual_col].isna().sum() + (df[actual_col].astype(str).str.strip() == "").sum()
+        if null_count > 0:
+            null_pct = (null_count / len(df)) * 100
+            if null_pct > 10:  # More than 10% null values
+                raise ValidationError(f"Column '{actual_col}' has {null_pct:.1f}% empty values. Max allowed: 10%")
+    
+    # 7. Sanitize column names (trim whitespace)
+    df.columns = df.columns.str.strip()
+    
+    # 8. Clean data: trim whitespace from string columns
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            df[col] = df[col].astype(str).str.strip()
+    
+    return df
+
+def safe_read_excel(path, sheet_name=0, dtype=None, **kwargs):
+    """
+    Safely read an Excel file with error recovery.
+    If file is corrupted, backs it up and returns empty DataFrame.
+    """
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    
+    try:
+        return pd.read_excel(path, sheet_name=sheet_name, dtype=dtype, engine="openpyxl", **kwargs)
+    except Exception as e:
+        # File is corrupted, try to backup and recover
+        try:
+            backup_path = path + ".corrupted"
+            if not os.path.exists(backup_path):
+                os.rename(path, backup_path)
+                print(f"⚠️ Corrupted Excel file backed up to: {backup_path}")
+        except Exception:
+            pass
+        return pd.DataFrame()
+
 def load_mapping(path="Questionnaire_Checklist.xlsx"):
     """Load Analyst Name -> Email mapping from Excel."""
-    return pd.read_excel(path)
+    return safe_read_excel(path)
 
 def get_lead_email(lead_name, mapping_path="Questionnaire_Checklist.xlsx", sheet_name="Team_Leader"):
     """Return the email for a given Team Leader name from the mapping Excel (Team_Leader sheet)."""
@@ -13,7 +101,10 @@ def get_lead_email(lead_name, mapping_path="Questionnaire_Checklist.xlsx", sheet
         return None
 
     # Load mapping sheet
-    df = pd.read_excel(mapping_path, sheet_name=sheet_name)
+    df = safe_read_excel(mapping_path, sheet_name=sheet_name)
+    if df.empty:
+        return None
+    
     df.columns = df.columns.str.strip()   # clean headers
     df = df.applymap(lambda x: str(x).strip() if isinstance(x, str) else x)
 
@@ -32,7 +123,10 @@ def get_QC_email(lead_name, mapping_path="Questionnaire_Checklist.xlsx", sheet_n
         return None
 
     # Load mapping sheet
-    df = pd.read_excel(mapping_path, sheet_name=sheet_name)
+    df = safe_read_excel(mapping_path, sheet_name=sheet_name)
+    if df.empty:
+        return None
+    
     df.columns = df.columns.str.strip()   # clean headers
     df = df.applymap(lambda x: str(x).strip() if isinstance(x, str) else x)
 
@@ -52,7 +146,10 @@ def get_fixed_cc(mapping_path="Questionnaire_Checklist.xlsx", sheet_name="Fixed_
     - Returns a list of email addresses or an empty list if none.
     """
     try:
-        df = pd.read_excel(mapping_path, sheet_name=sheet_name)
+        df = safe_read_excel(mapping_path, sheet_name=sheet_name)
+        if df.empty:
+            return []
+        
         df.columns = df.columns.str.strip()  # clean header names
 
         if "Email" not in df.columns:

@@ -9,9 +9,10 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import os, uuid
-
-from email_tool.email.modules.utils import format_body, get_email, get_lead_email, get_QC_email, get_fixed_cc
+import html
+from email_tool.email.modules.utils import format_body, get_email, get_lead_email, get_QC_email, get_fixed_cc, validate_uploaded_file, ValidationError
 from email_tool.email.modules.mailer import get_sender_name, send_mail
+from email_tool.email.modules.safe_excel import SafeExcelHandler
  
 from email_tool.email.modules.user_manager import (
     ensure_user_sheets,
@@ -22,7 +23,13 @@ from email_tool.email.modules.user_manager import (
     SHEET_NAME_HEADER,
     EMAIL_HEADER,
 )
- 
+import sys
+import os
+import re
+
+# Add project root
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 st.set_page_config(page_title="📧 Feedback Email Automation Tool", layout="centered")
 
 # ---------- Helpers to find project root & shared data dir ----------
@@ -44,6 +51,11 @@ def find_project_root(start_dir: str = None) -> str:
             # reached filesystem root, return current dir as fallback
             return cur
         cur = parent
+
+def clean_excel_text(value):
+    if isinstance(value, str):
+        return html.escape(value)
+    return value
 
 PROJECT_ROOT = find_project_root()
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -72,6 +84,16 @@ def main():
     DATA_DIR = os.path.join(PROJECT_ROOT, "data")
     os.makedirs(DATA_DIR, exist_ok=True)
     RECORDS_PATH = os.path.join(DATA_DIR, "feedback_records.xlsx")
+
+    # --- clean up any stale helper files left by previous crashes ---
+    for suffix in [".lock", ".tmp.xlsx", ".bak"]:
+        stale = RECORDS_PATH + suffix
+        if os.path.exists(stale):
+            try:
+                os.remove(stale)
+            except Exception:
+                pass
+
     
     st.markdown("""
     <style>
@@ -185,114 +207,151 @@ def main():
     with send_tab:
         st.header("Send Emails")
         st.write("Upload a feedback Excel (it must contain at least: Date, Ticket Number, Quality Coach, Team Leader, Analyst Name).")
-    
+
         uploaded_file = st.file_uploader("Upload Feedback Sheet (Excel)", type=["xlsx"])
         if uploaded_file is None:
             st.info("Upload the feedback sheet to begin.")
         else:
             try:
-                df = pd.read_excel(uploaded_file, dtype=str)
+                # Use production-grade validation
+                df = validate_uploaded_file(uploaded_file)
+            except ValidationError as e:
+                st.error(f"❌ Upload failed: {e}")
+                df = None
             except Exception as e:
-                st.error(f"Failed to read uploaded Excel: {e}")
+                st.error(f"❌ Unexpected error reading file: {str(e)[:200]}")
                 df = None
 
             if df is not None:
+                st.success(f"✅ File validated successfully ({len(df)} rows)")
                 st.subheader("Preview of uploaded data")
                 st.dataframe(df.head())
 
                 if st.button("Prepare feedback records"):
-                
+
                     try:
                         # Start from full uploaded dataframe (preserve all columns)
                         df_new = df.copy()
-                
+
+                        # Normalize column names (remove spaces / newline issues)
+                        df_new.columns = df_new.columns.str.strip()
+
                         # Ensure meta columns exist in the uploaded copy
-                        for col in ["Response", "Response_Comments", "Feedback_Timestamp", "Token", "Token_Used"]:
+                        meta_cols = ["Response", "Response_Comments", "Feedback_Timestamp", "Token", "Token_Used"]
+                        for col in meta_cols:
                             if col not in df_new.columns:
                                 df_new[col] = ""
-                
-                        # Generate tokens for empty Token values in uploaded data
+
+                        # Generate tokens only where empty
                         def gen_token_if_empty(t):
                             if pd.isna(t) or str(t).strip() == "":
                                 return uuid.uuid4().hex
                             return str(t).strip()
-                
+
                         df_new["Token"] = df_new["Token"].apply(gen_token_if_empty)
                         df_new["Token_Used"] = df_new["Token_Used"].fillna("")
-                
-                        # If no existing records file, simply save df_new (preserves all uploaded columns)
+
+                        # Inform user if any rows contain newlines/bullets (safe but may look odd)
+                        mask_multi = df_new.applymap(lambda v: isinstance(v, str) and ('\n' in v or '•' in v))
+                        if mask_multi.any(axis=None):
+                            count = mask_multi.any(axis=1).sum()
+                            st.warning(f"{count} row(s) contain line breaks or bullets; they'll be preserved safely.")
+
+                        # If no existing file → save uploaded file exactly as is
                         if not os.path.exists(RECORDS_PATH):
                             os.makedirs(os.path.dirname(RECORDS_PATH), exist_ok=True)
-                            df_new.to_excel(RECORDS_PATH, index=False, engine="openpyxl")
+                            # Use safe atomic write with automatic backup and multi-line text handling
+                            try:
+                                SafeExcelHandler.safe_write_excel(df_new, RECORDS_PATH, create_backup=False)
+                                st.success("Feedback records saved successfully!")
+                            except Exception as e:
+                                st.error(f"Failed to save records: {e}")
+                                raise
                         else:
-                            # Load existing records (preserve their columns)
-                            df_existing = pd.read_excel(RECORDS_PATH, dtype=str, engine="openpyxl").fillna("")
-                
+                            # Load existing records
+                            try:
+                                df_existing = pd.read_excel(RECORDS_PATH, dtype=str, engine="openpyxl").fillna("")
+                            except Exception as e:
+                                # File is corrupted, backup and create fresh
+                                try:
+                                    backup_path = RECORDS_PATH + ".corrupted"
+                                    if not os.path.exists(backup_path):
+                                        os.rename(RECORDS_PATH, backup_path)
+                                    st.warning(f"Corrupted feedback records backed up. Starting fresh.")
+                                except Exception:
+                                    pass
+                                df_existing = pd.DataFrame()
+                            
+                            df_existing.columns = df_existing.columns.str.strip()
+
                             # Ensure meta columns exist in existing file
-                            for col in ["Response", "Response_Comments", "Feedback_Timestamp", "Token", "Token_Used"]:
+                            for col in meta_cols:
                                 if col not in df_existing.columns:
                                     df_existing[col] = ""
-                
-                            # Build a set of existing keys for quick lookup (ticket, analyst)
+
+                            # Normalized key for matching
                             def norm_key(ticket, analyst):
-                                return (str(ticket or "").strip().lower(), str(analyst or "").strip().lower())
-                
-                            existing_keys = set()
-                            if "Ticket Number" in df_existing.columns or "Analyst Name" in df_existing.columns:
-                                for _, r in df_existing.iterrows():
-                                    existing_keys.add(norm_key(r.get("Ticket Number", ""), r.get("Analyst Name", "")))
-                
-                            # Prepare list of new rows to append (as dicts) preserving uploaded columns
+                                return (str(ticket).strip().lower(), str(analyst).strip().lower())
+
+                            # Track existing Ticket+Analyst combinations
+                            existing_keys = {
+                                norm_key(r.get("Ticket Number", ""), r.get("Analyst Name", ""))
+                                for _, r in df_existing.iterrows()
+                            }
+
+                            # List to collect new rows
                             new_rows = []
                             appended = 0
+
                             for _, r in df_new.iterrows():
-                                t_val = str(r.get("Ticket Number", "") or "").strip()
-                                a_val = str(r.get("Analyst Name", "") or "").strip()
+                                t_val = str(r.get("Ticket Number", "")).strip()
+                                a_val = str(r.get("Analyst Name", "")).strip()
                                 key = norm_key(t_val, a_val)
-                
-                                # if either Ticket+Analyst match an existing record, skip (do not overwrite)
+
+                                # Skip if already present
                                 if key in existing_keys:
                                     continue
-                
-                                # Build row dict preserving all columns from uploaded row
-                                new_row = {}
-                                for c in df_new.columns:
-                                    new_row[c] = r.get(c, "") if c in r.index else ""
-                
-                                # Ensure meta columns exist in this new row
-                                if "Token" not in new_row or str(new_row.get("Token", "")).strip() == "":
-                                    new_row["Token"] = uuid.uuid4().hex
-                                if "Token_Used" not in new_row:
-                                    new_row["Token_Used"] = ""
-                                if "Response" not in new_row:
-                                    new_row["Response"] = ""
-                                if "Response_Comments" not in new_row:
-                                    new_row["Response_Comments"] = ""
-                                if "Feedback_Timestamp" not in new_row:
-                                    new_row["Feedback_Timestamp"] = ""
-                
+
+                                # Build new row dict by exact column names (SAFE!)
+                                # new_row = {c: (r[c] if c in r else "") for c in df_new.columns}
+                                new_row = {c: clean_excel_text(r[c]) if c in r else "" for c in df_new.columns}
+
+                                # Ensure meta fields exist
+                                new_row["Token"] = new_row.get("Token", "") or uuid.uuid4().hex
+                                new_row["Token_Used"] = new_row.get("Token_Used", "") or ""
+                                new_row["Response"] = new_row.get("Response", "") or ""
+                                new_row["Response_Comments"] = new_row.get("Response_Comments", "") or ""
+                                new_row["Feedback_Timestamp"] = new_row.get("Feedback_Timestamp", "") or ""
+
                                 new_rows.append(new_row)
                                 appended += 1
                                 existing_keys.add(key)
-                
-                            # If there are new rows, append them to existing dataframe
+
+                            # Append only if new rows exist
                             if new_rows:
                                 df_append = pd.DataFrame(new_rows)
-                                # Combine columns: union of existing and new columns (existing order preserved, new columns appended)
+
+                                # Ensure column names match existing file exactly
                                 all_cols = list(df_existing.columns)
                                 for c in df_append.columns:
                                     if c not in all_cols:
                                         all_cols.append(c)
-                                # Reindex both frames to all_cols before concat (fills missing with "")
+
                                 df_existing = df_existing.reindex(columns=all_cols).fillna("")
                                 df_append = df_append.reindex(columns=all_cols).fillna("")
+
                                 df_out = pd.concat([df_existing, df_append], ignore_index=True)
                             else:
                                 df_out = df_existing.copy()
-                
-                            # Save merged output
-                            os.makedirs(os.path.dirname(RECORDS_PATH), exist_ok=True)
-                            df_out.to_excel(RECORDS_PATH, index=False, engine="openpyxl")
+
+                            # Save merged output with safe atomic write (handles multi-line text)
+                            try:
+                                SafeExcelHandler.safe_write_excel(df_out, RECORDS_PATH, create_backup=True)
+                                st.success(f"Feedback records updated successfully! ({appended} new records added)")
+                            except Exception as e:
+                                st.error(f"Failed to save records: {e}")
+                                raise
+
                     except Exception as e:
                         st.error(f"Failed to prepare/append records: {e}")
     
@@ -310,7 +369,19 @@ def main():
                         st.error("Prepared feedback records not found. Please click 'Prepare feedback records' first.")
                     else:
                         try:
-                            df_records = pd.read_excel(RECORDS_PATH, dtype=str, engine="openpyxl").fillna("")
+                            try:
+                                # Use safe read with file locking and multi-line text support
+                                df_records = SafeExcelHandler.safe_read_excel(RECORDS_PATH)
+                            except Exception as e:
+                                # File is corrupted - attempt recovery from backup
+                                st.warning(f"⚠️  Error reading feedback records: {e}")
+                                st.info("Attempting to recover from backup...")
+                                if SafeExcelHandler.recover_from_backup(RECORDS_PATH):
+                                    st.success("✓ Recovered from backup. Please refresh and try again.")
+                                    st.stop()
+                                else:
+                                    st.error("Could not recover from backup. Please re-prepare the records.")
+                                    st.stop()
 
                             # Ensure Mail_Sent column exists
                             if "Mail_Sent" not in df_records.columns:
@@ -360,8 +431,11 @@ def main():
                                 progress_bar.progress(min(progress, 100))
                                 counter_placeholder.text(f"📨 Sent {sent_count}/{total} emails (Skipped {skipped_count})")
 
-                            # Save updated records after sending
-                            df_records.to_excel(RECORDS_PATH, index=False, engine="openpyxl")
+                            # Save updated records after sending with safe atomic write
+                            try:
+                                SafeExcelHandler.safe_write_excel(df_records, RECORDS_PATH, create_backup=True)
+                            except Exception as save_err:
+                                st.warning(f"Note: Could not save email status: {save_err}. This won't affect sent emails.")
 
                             end_time = datetime.now()
                             duration = end_time - start_time
@@ -880,7 +954,19 @@ def main():
                         else:
                             try:
                                 # Reload the latest file to avoid stale data
-                                df_all = pd.read_excel(RECORDS_PATH, dtype=str, engine="openpyxl").fillna("")
+                                try:
+                                    df_all = pd.read_excel(RECORDS_PATH, dtype=str, engine="openpyxl").fillna("")
+                                except Exception as e:
+                                    # File is corrupted
+                                    try:
+                                        backup_path = RECORDS_PATH + ".corrupted"
+                                        if not os.path.exists(backup_path):
+                                            os.rename(RECORDS_PATH, backup_path)
+                                        st.error(f"Corrupted feedback records detected and backed up. Cannot proceed with deletion.")
+                                    except Exception:
+                                        pass
+                                    st.stop()
+                                
                                 df_all = df_all.reset_index(drop=True)
                                 # add SR No to this fresh df for reference
                                 df_all.insert(0, "SR No.", df_all.index.map(lambda x: x + 1))

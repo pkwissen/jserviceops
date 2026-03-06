@@ -32,8 +32,9 @@ def openai_chat_completion(
     """
 
     client = OpenAIClient(
-        base_url="https://wise-gateway.wisseninfotech.com",
-        api_key="sk-84HmOIqSTNnBlPL4K4Z95A"
+        # base_url="https://wise-gateway.wisseninfotech.com", 
+    base_url= "https://wise-gateway-console.wisseninfotech.com/proxy/v1",
+       api_key="sk-84HmOIqSTNnBlPL4K4Z95A"
     )
 
     # Build messages

@@ -17,6 +17,8 @@ import forecast_app_final.app as forecast_app
 import ticket_feedback_dashboard.app as ticket_dashboard
 import jacobs_qa.app as jacobs_qa_app
 import email_tool.email.app as email_app
+import ai_quality_tool.email_tool_ai.email_ai.app as ai_tool_quality_app
+import intelligent_agent_assist_code.app as intelligent_agent_app
 
 # ---- Session state navigation setup ----
 if "current_app" not in st.session_state:
@@ -37,3 +39,9 @@ elif st.session_state["current_app"] == "Jacobs_QA":
 
 elif st.session_state["current_app"] in ["Email_Tool", "Email_Automation"]:
     email_app.main()
+
+elif st.session_state["current_app"] == "AI_Quality_Tool":
+    ai_tool_quality_app.main()
+ 
+elif st.session_state["current_app"] == "Intelligent_Agent":
+    intelligent_agent_app.main()

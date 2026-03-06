@@ -39,3 +39,24 @@ def main():
         if st.button("Go to Email Automation", key="btn_email_automation"):
             st.session_state["current_app"] = "Email_Automation"
             st.rerun()
+
+
+    # Third row → AI Tool for Quality Team
+    col5, col6 = st.columns(2)
+
+    with col5:
+        st.subheader("📧 AI Tool for Quality Team")
+        st.markdown("QM Form for quality assessment and Email Automation.")
+        if st.button("Go to QM Feedback Email Automation Tool", key="btn_ai_tool"):
+            st.session_state["current_app"] = "AI_Quality_Tool"
+            st.rerun()
+
+
+    # Fourth row → Intelligent Agent Assist
+ 
+    with col6:
+        st.subheader("🤖 Intelligent Agent Assist")
+        st.markdown("Assist agents with knowledge retrieval, automation, and guidance.")
+        if st.button("Go to Intelligent Agent Assist", key="btn_intelligent_agent"):
+            st.session_state["current_app"] = "Intelligent_Agent"
+            st.rerun()

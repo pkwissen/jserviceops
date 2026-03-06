@@ -1,0 +1,35 @@
+# Intelligent Agent Assist - Requirements
+# Core dependencies for the chatbot application
+
+# Web Framework
+streamlit>=1.28.0
+
+# AWS & OpenSearch
+boto3>=1.26.0
+opensearchpy>=2.0.0
+
+# LLM & Embeddings
+openai>=1.0.0
+
+# Configuration
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# SharePoint
+msal>=1.24.0
+msgraph-core>=0.2.2
+
+# Document Processing
+python-docx>=0.8.11
+pypdf>=3.0.0
+
+# Networking & Utils
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Data Processing
+pandas>=1.5.0
+numpy>=1.23.0
+
+# Testing (optional)
+pytest>=7.0.0

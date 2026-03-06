@@ -81,3 +81,6 @@ zope.event
 zope.interface
 pywin32
 msal
+python-docx
+opensearch-py
+filelock

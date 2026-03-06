@@ -8,7 +8,7 @@ load_dotenv()
 # --------------------------------------------------------------------
 # Config from environment (no hard-coding)
 # --------------------------------------------------------------------
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "wise-azure-gpt-4.1-mini")
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "wise-azure-gpt-5")
 DEFAULT_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://wise-gateway.wisseninfotech.com")
 DEFAULT_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -38,7 +38,7 @@ class OpenAIClient:
             model=model,
             messages=messages,
             max_tokens=max_tokens,
-            temperature=0.2,
+            temperature=1,
             timeout=30,
         )
         return (resp.choices[0].message.content or "").strip()

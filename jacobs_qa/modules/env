@@ -1,0 +1,6 @@
+# .env file
+OPENAI_API_KEY=sk-84HmOIqSTNnBlPL4K4Z95A
+GROQ_API_KEY=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
+OPENAI_MODEL=wise-azure-gpt-4.1-mini
+# OPENAI_BASE_URL=https://wise-gateway.wisseninfotech.com 
+OPENAI_BASE_URL="https://wise-gateway-console.wisseninfotech.com/proxy/v1"
