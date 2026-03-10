@@ -1,0 +1,16 @@
+{
+  "id": "4569a036f8f8",
+  "created_at": "2026-03-09T13:51:23.519309+05:30",
+  "title": "password reset",
+  "messages": [
+    {
+      "role": "user",
+      "content": "password reset"
+    },
+    {
+      "role": "assistant",
+      "content": "\u274c Error during search: \u274c Failed to connect to OpenSearch cluster at https://search-wise-hr-dev-hma5gg3zkxt5a3shkalu2f4qle.aos.us-east-1.on.aws. Error: 'charmap' codec can't encode character '\\u2705' in position 0: character maps to <undefined>. Check if cluster is running and credentials are valid.",
+      "reference": null
+    }
+  ]
+}

@@ -1,6 +1,0 @@
-opensearch:
-  index_name: jacobs_vector_v2
-  
-embeddings:
-  model: "wise-azure-text-embedding-3-small"
-  dimension: 1536

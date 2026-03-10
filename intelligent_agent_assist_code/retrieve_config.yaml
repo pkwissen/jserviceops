@@ -1,8 +1,0 @@
-retrieval:
-  default_top_k: 5
-  use_hybrid_search: true
-  
-output:
-  include_text: true
-  include_embeddings: false
-  include_metadata: true

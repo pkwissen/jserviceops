@@ -131,5 +131,5 @@ def save_current_chat(force_save=False):
             return chat_id
     
     except Exception as e:
-        print(f"[WARNING] Failed to save chat: {str(e)}")
+        st.warning(f"Failed to save chat: {str(e)}")
         return None
